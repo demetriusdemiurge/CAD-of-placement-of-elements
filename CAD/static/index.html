@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>PCB Placer — Поле по умолчанию + Конструктор по точкам</title>
+  <style>
+    :root { --pad:20px; --bg:#0b1220; --fg:#e6eefc; --panel:#0f1828; --border:#3c4d66; }
+    * { box-sizing:border-box }
+    body{ margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif; }
+    header{ padding:16px var(--pad); border-bottom:1px solid #23364e; }
+    main{ padding:16px var(--pad); display:flex; flex-direction:column; gap:16px; }
+    h1{ font-size:18px; margin:0 0 8px }
+    h2{ font-size:16px; margin:0 0 8px }
+    .row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .panel{ background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:12px; }
+    button{ background:#1f2a3a; color:var(--fg); border:1px solid var(--border); border-radius:10px; padding:8px 12px; cursor:pointer }
+    input,select{ background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:8px; padding:6px 10px }
+    #boardWrap{ display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+    #board{ box-shadow:0 0 0 1px #2b3b55 inset; border-radius:12px; }
+    #log{ max-height:160px; overflow:auto; }
+    /* Конструктор ниже — почти на весь экран */
+    #editor{ height:75vh; display:flex; flex-direction:column; gap:12px; }
+    #edCanvas{ flex:1; width:100%; background:#0f1828; border:1px solid var(--border); border-radius:12px; }
+    .hint{ opacity:.75; font-size:12px }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PCB Placer</h1>
+    <div class="row">
+      <button id="btnDemo">Загрузить DEMO</button>
+      <div class="panel">
+        <div class="row">
+          <label>ГА: pop <input id="pop" type="number" value="120" style="width:84px"></label>
+          <label>gens <input id="gens" type="number" value="400" style="width:84px"></label>
+          <label>islands <input id="islands" type="number" value="4" style="width:84px"></label>
+          <label>mig <input id="mi" type="number" value="20" style="width:84px"></label>
+          <label>mut <input id="mut" type="number" step="0.01" value="0.2" style="width:84px"></label>
+          <label>w_pair <input id="wpair" type="number" step="0.1" value="1.0" style="width:84px"></label>
+          <label>w_long <input id="wlong" type="number" step="0.1" value="0.3" style="width:84px"></label>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <button id="btnSeq">Sequential</button>
+          <button id="btnGA">Parallel GA</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Секция платы и поля -->
+    <section id="boardWrap">
+      <div class="panel">
+        <h2>Поле позиций</h2>
+        <div class="row">
+          <label>nx <input id="nx" type="number" value="16" style="width:84px"></label>
+          <label>ny <input id="ny" type="number" value="10" style="width:84px"></label>
+          <button id="btnRebuild">Перестроить поле</button>
+          <button id="btnToggleAdd">Добавлять точки кликом</button>
+          <button id="btnClearField">Очистить поле</button>
+        </div>
+      </div>
+      <div id="board"></div>
+      <pre id="log" class="panel" style="min-width:320px; flex:1">Готов.</pre>
+    </section>
+
+    <!-- Секция конструктора (ниже, 75vh) -->
+    <section id="editor" class="panel">
+      <div class="row" style="justify-content:space-between">
+        <h2>Конструктор формы (по точкам)</h2>
+        <div class="row">
+          <label>Редактор: сетка (мм) <input id="egrid" type="number" step="0.5" value="1.0" style="width:84px"></label>
+          <button id="btnUndo">Отменить</button>
+          <button id="btnClearShapes">Сбросить</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="panel">
+          <div class="row">
+            <input id="cname" placeholder="Имя (например U10)" style="width:160px">
+            <input id="cw" type="number" step="0.1" placeholder="W" style="width:84px">
+            <input id="ch" type="number" step="0.1" placeholder="H" style="width:84px">
+            <button id="btnAddComp">Добавить компонент</button>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <select id="compSelect" style="min-width:200px"></select>
+            <button id="btnSaveGeom">Сохранить геометрию в компонент</button>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <select id="la" style="min-width:140px"></select>
+            <select id="lb" style="min-width:140px"></select>
+            <input id="lcnt" type="number" value="1" style="width:84px">
+            <button id="btnAddLink">Добавить связь</button>
+          </div>
+          <div class="hint">Рисование только по точкам: кликай, чтобы добавлять вершины. <b>Двойной клик</b> — завершить многоугольник и начать новый.</div>
+        </div>
+      </div>
+
+      <svg id="edCanvas" viewBox="0 0 1000 750"></svg>
+    </section>
+  </main>
+
+<script>
+/* ==== Константы платы ==== */
+const SCALE = 5.0;   // px per mm (плата)
+const PAD   = 20;
+const DEFAULT_NX = 16, DEFAULT_NY = 10;
+
+/* ==== Глобальные данные ==== */
+let DESIGN = null;   // {board, components[], nets[], links[], field[]}
+let ADD_POS = false; // режим добавления точек на поле
+let drawing = null;  // текущая полилиния редактора
+let shapes  = [];    // список {type:'polygon', points:[[x,y],...]}
+const E_S = 6;       // редактор: px per mm
+const ED_W = 1000, ED_H = 750; // viewBox редактора в px around center
+const ED_CX = ED_W/2, ED_CY = ED_H/2;
+
+/* ==== Утилиты ==== */
+function ensureDesign(){
+  if(!DESIGN){
+    DESIGN = {board:{W:160,H:100,grid:1,margin:5}, components:[], nets:[], links:[], field:[]};
+  }
+}
+function pxBoard(v){ return PAD + v * SCALE; }
+function mmFromBoardPx(px){ return (px - PAD) / SCALE; }
+function edPX(xmm){ return ED_CX + xmm*E_S; }
+function edPY(ymm){ return ED_CY - ymm*E_S; }
+function edMMx(px){ return (px - ED_CX) / E_S; }
+function edMMy(py){ return (ED_CY - py) / E_S; }
+function snap(v, g){ return Math.round(v/g)*g; }
+
+/* ==== Инициализация ==== */
+document.addEventListener('DOMContentLoaded', async () => {
+  ensureDesign();
+  // 1) Поле — сразу при заходе
+  document.getElementById('nx').value = DEFAULT_NX;
+  document.getElementById('ny').value = DEFAULT_NY;
+  rebuildField(); // авто-поле
+  // 2) Первичный отрисовщик
+  renderBoard();
+  drawEditor();
+  // 3) Навесить обработчики
+  bindUI();
+});
+
+/* ==== Связь UI ==== */
+function bindUI(){
+  byId('btnDemo').onclick = loadDemo;
+  byId('btnRebuild').onclick = rebuildField;
+  byId('btnClearField').onclick = () => { DESIGN.field=[]; renderBoard(); };
+  byId('btnToggleAdd').onclick = () => { ADD_POS=!ADD_POS; setLog(ADD_POS?'Режим добавления точек поля включён':'Выключен'); };
+
+  byId('btnSeq').onclick = runSeq;
+  byId('btnGA').onclick  = runGA;
+
+  byId('btnAddComp').onclick = addComp;
+  byId('btnSaveGeom').onclick= saveGeometryToComponent;
+  byId('btnAddLink').onclick = addLink;
+
+  byId('btnUndo').onclick        = () => { if(drawing && drawing.points.length) drawing.points.pop(); else shapes.pop(); drawEditor(); };
+  byId('btnClearShapes').onclick = () => { drawing=null; shapes=[]; drawEditor(); };
+
+  // события на плате
+  // делегируем на контейнер (svg вставляется динамически)
+  document.getElementById('board').addEventListener('click', onBoardClick);
+
+  // события редактора (по точкам)
+  const ed = byId('edCanvas');
+  ed.addEventListener('click', edClick);
+  ed.addEventListener('dblclick', edDblClick);
+  ed.addEventListener('mousemove', edMove);
+}
+
+/* ==== Работа с полем ==== */
+function rebuildField(){
+  ensureDesign();
+  const nx = parseInt(byId('nx').value || DEFAULT_NX);
+  const ny = parseInt(byId('ny').value || DEFAULT_NY);
+  const {W,H,margin,grid} = DESIGN.board;
+  const xs=[...Array(nx).keys()].map(i => margin + (W-2*margin)*(nx>1? i/(nx-1):0));
+  const ys=[...Array(ny).keys()].map(j => margin + (H-2*margin)*(ny>1? j/(ny-1):0));
+  const field=[]; const seen=new Set();
+  for(const y of ys) for(const x of xs){
+    const sx=snap(x,grid), sy=snap(y,grid);
+    const key = sx.toFixed(3)+'_'+sy.toFixed(3);
+    if(!seen.has(key)){ seen.add(key); field.push([sx,sy]); }
+  }
+  DESIGN.field = field;
+  renderBoard();
+  setLog(`Поле создано автоматически: ${field.length} позиций (nx=${nx}, ny=${ny}).`);
+}
+
+function renderBoard(){
+  const {W,H} = DESIGN.board;
+  const wpx = Math.round(W*SCALE)+2*PAD, hpx = Math.round(H*SCALE)+2*PAD;
+  let lines = [];
+  lines.push(`<rect x="${pxBoard(0)}" y="${pxBoard(0)}" width="${W*SCALE}" height="${H*SCALE}" fill="#111" stroke="#555" rx="8" />`);
+  if(DESIGN.field){
+    for(const [x,y] of DESIGN.field){
+      lines.push(`<circle cx="${pxBoard(x)}" cy="${pxBoard(y)}" r="2.5" fill="#2f8" fill-opacity="0.8"/>`);
+    }
+  }
+  document.getElementById('board').innerHTML =
+    `<svg id="boardSvg" xmlns="http://www.w3.org/2000/svg" width="${wpx}" height="${hpx}" viewBox="0 0 ${wpx} ${hpx}">\n`+
+    lines.join("\n")+"\n</svg>";
+}
+
+function onBoardClick(ev){
+  if(!ADD_POS) return;
+  const svg = document.getElementById('boardSvg');
+  if(!svg) return;
+  const rect = svg.getBoundingClientRect();
+  const x = mmFromBoardPx(ev.clientX - rect.left);
+  const y = mmFromBoardPx(ev.clientY - rect.top);
+  const {W,H,grid} = DESIGN.board;
+  if(x<0||y<0||x>W||y>H) return;
+  DESIGN.field.push([snap(x,grid), snap(y,grid)]);
+  renderBoard();
+}
+
+/* ==== Конструктор по точкам ==== */
+function drawEditor(){
+  const svg = byId('edCanvas');
+  const g = parseFloat(byId('egrid').value || '1.0');
+  // сетка + оси
+  let elems = [];
+  // сетка
+  for(let x=-80; x<=80; x+=g){ elems.push(`<line x1="${edPX(x)}" y1="${edPY(-60)}" x2="${edPX(x)}" y2="${edPY(60)}" stroke="#23364e" stroke-width="1"/>`); }
+  for(let y=-60; y<=60; y+=g){ elems.push(`<line x1="${edPX(-80)}" y1="${edPY(y)}" x2="${edPX(80)}" y2="${edPY(y)}" stroke="#23364e" stroke-width="1"/>`); }
+  // оси
+  elems.push(`<line x1="${edPX(-80)}" y1="${edPY(0)}" x2="${edPX(80)}" y2="${edPY(0)}" stroke="#4d6a8a" stroke-width="2"/>`);
+  elems.push(`<line x1="${edPX(0)}" y1="${edPY(-60)}" x2="${edPX(0)}" y2="${edPY(60)}" stroke="#4d6a8a" stroke-width="2"/>`);
+  // готовые полигоны
+  for(const poly of shapes){
+    const pts = poly.points.map(([x,y]) => `${edPX(x)},${edPY(y)}`).join(' ');
+    elems.push(`<polygon points="${pts}" fill="#1f2a3a" stroke="#9fb0c3" stroke-width="1"/>`);
+  }
+  // текущее рисование
+  if(drawing){
+    const pts = drawing.points.concat(drawing.preview? [drawing.preview] : []);
+    // линии
+    for(let i=1;i<pts.length;i++){
+      elems.push(`<line x1="${edPX(pts[i-1][0])}" y1="${edPY(pts[i-1][1])}" x2="${edPX(pts[i][0])}" y2="${edPY(pts[i][1])}" stroke="#90caf9" stroke-width="2"/>`);
+    }
+    // вершины
+    for(const [x,y] of pts){
+      elems.push(`<circle cx="${edPX(x)}" cy="${edPY(y)}" r="4" fill="#90caf9"/>`);
+    }
+  }
+  svg.innerHTML = elems.join('\n');
+}
+
+function edClick(ev){
+  const pt = clientToEditor(ev);
+  const g = parseFloat(byId('egrid').value || '1.0');
+  const x = snap(pt[0], g), y = snap(pt[1], g);
+  if(!drawing){
+    drawing = { type:'polyline', points:[[x,y]], preview:null };
+  } else {
+    drawing.points.push([x,y]);
+  }
+  drawEditor();
+}
+
+function edMove(ev){
+  if(!drawing) return;
+  const pt = clientToEditor(ev);
+  const g = parseFloat(byId('egrid').value || '1.0');
+  drawing.preview = [snap(pt[0], g), snap(pt[1], g)];
+  drawEditor();
+}
+
+function edDblClick(ev){
+  if(!drawing || drawing.points.length < 3) return;
+  // сформировать многоугольник
+  shapes.push({ type:'polygon', points:[...drawing.points] });
+  drawing = null;
+  drawEditor();
+}
+
+function clientToEditor(ev){
+  const svg = byId('edCanvas');
+  const rect = svg.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  const y = ev.clientY - rect.top;
+  return [ edMMx(x), edMMy(y) ];
+}
+
+/* ==== Компоненты и связи ==== */
+function addComp(){
+  ensureDesign();
+  const name = byId('cname').value.trim();
+  const w = parseFloat(byId('cw').value || '8');
+  const h = parseFloat(byId('ch').value || '6');
+  if(!name) return alert('Имя компонента?');
+  if(DESIGN.components.find(c=>c.name===name)) return alert('Такое имя уже есть');
+  DESIGN.components.push({name,w,h,movable:true});
+  refreshCompLists();
+}
+
+function refreshCompLists(){
+  const sel = byId('compSelect'); sel.innerHTML='';
+  const la  = byId('la'); la.innerHTML='';
+  const lb  = byId('lb'); lb.innerHTML='';
+  (DESIGN.components||[]).forEach((c,i)=>{
+    const o=document.createElement('option'); o.value=i; o.textContent=c.name; sel.appendChild(o);
+    const o1=document.createElement('option'); o1.value=c.name; o1.textContent=c.name; la.appendChild(o1);
+    const o2=document.createElement('option'); o2.value=c.name; o2.textContent=c.name; lb.appendChild(o2);
+  });
+}
+
+function saveGeometryToComponent(){
+  const idx = parseInt(byId('compSelect').value);
+  if(isNaN(idx)) return alert('Выбери компонент');
+  // сохраняем набор многоугольников
+  DESIGN.components[idx].geometry = shapes.map(s => ({type:'polygon', points:s.points.map(([x,y])=>[+x.toFixed(3), +y.toFixed(3)])}));
+  // обновим габариты по bbox
+  let xmin=0,xmax=0,ymin=0,ymax=0,init=false;
+  for(const s of shapes){
+    for(const [x,y] of s.points){
+      if(!init){ xmin=xmax=x; ymin=ymax=y; init=true; }
+      xmin=Math.min(xmin,x); xmax=Math.max(xmax,x);
+      ymin=Math.min(ymin,y); ymax=Math.max(ymax,y);
+    }
+  }
+  if(init){
+    DESIGN.components[idx].w = +(xmax-xmin).toFixed(3);
+    DESIGN.components[idx].h = +(ymax-ymin).toFixed(3);
+  }
+  setLog(`Геометрия сохранена в ${DESIGN.components[idx].name}`);
+}
+
+function addLink(){
+  const a = byId('la').value, b = byId('lb').value, cnt = parseInt(byId('lcnt').value||'1');
+  if(a===b) return alert('Выбери разные узлы');
+  if(!DESIGN.links) DESIGN.links=[];
+  DESIGN.links.push({a,b,count:cnt});
+  setLog(`Связь ${a}—${b} ×${cnt} добавлена.`);
+}
+
+async function loadDemo(){
+  const r = await fetch('/api/design/demo');
+  DESIGN = await r.json();
+  // не трогаем поле — оно уже есть; просто перерисуем
+  renderBoard();
+  refreshCompLists();
+  setLog('DEMO загружен.');
+}
+
+/* ==== Размещение ==== */
+async function runSeq(){
+  if(!DESIGN?.field || DESIGN.field.length < (DESIGN.components?.length||0)) return alert('Недостаточно позиций');
+  const r=await fetch('/api/place/seq',{method:'POST',headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({design: DESIGN, nx:DEFAULT_NX, ny:DEFAULT_NY, seed:0,
+      w_pair: parseFloat(byId('wpair').value||'1.0'),
+      w_longest: parseFloat(byId('wlong').value||'0.3')})});
+  const d=await r.json();
+  if(d.error) return setLog(d.error);
+  byId('board').innerHTML = d.svg; // визуализация на плате (с компонентами и связями)
+  setLog(`Sequential → score=${d.metrics.score.toFixed(4)} pair=${d.metrics.pair_sum.toFixed(2)} longest=${d.metrics.longest.toFixed(2)}`);
+}
+
+async function runGA(){
+  if(!DESIGN?.field || DESIGN.field.length < (DESIGN.components?.length||0)) return alert('Недостаточно позиций');
+  const payload = {
+    design: DESIGN,
+    options: {
+      nx:DEFAULT_NX, ny:DEFAULT_NY,
+      pop_size: parseInt(byId('pop').value||'120'),
+      generations: parseInt(byId('gens').value||'400'),
+      islands: parseInt(byId('islands').value||'4'),
+      migration_interval: parseInt(byId('mi').value||'20'),
+      mut_rate: parseFloat(byId('mut').value||'0.2'),
+      seed: 0,
+      w_pair: parseFloat(byId('wpair').value||'1.0'),
+      w_longest: parseFloat(byId('wlong').value||'0.3')
+    }
+  };
+  setLog('GA: расчёт...');
+  const r=await fetch('/api/place/ga',{method:'POST',headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+  const d=await r.json();
+  if(d.error) return setLog(d.error);
+  byId('board').innerHTML = d.svg;
+  setLog(`GA → score=${d.metrics.score.toFixed(4)} pair=${d.metrics.pair_sum.toFixed(2)} longest=${d.metrics.longest.toFixed(2)}`);
+}
+
+/* ==== Вспомогательные ==== */
+function byId(id){ return document.getElementById(id); }
+function setLog(t){ byId('log').textContent = t; }
+</script>
+</body>
+</html>
