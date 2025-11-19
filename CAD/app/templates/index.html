@@ -1,128 +1,634 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="utf-8">
-    <title>PCB CAD Placement Demo</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KiCad Web Editor - Графический редактор компонентов</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #34495e;
+            --accent-color: #3498db;
+            --danger-color: #e74c3c;
+            --success-color: #27ae60;
+            --warning-color: #f39c12;
+            --text-color: #ecf0f1;
+            --border-color: #4a6278;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: var(--text-color);
+            overflow: hidden;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: var(--primary-color);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .controls button, .controls select {
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--accent-color);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 12px;
+        }
+
+        .controls button:hover {
+            background: #2980b9;
+            transform: translateY(-1px);
+        }
+
+        .controls select {
+            background: var(--secondary-color);
+        }
+
+        .help-text {
+            margin-left: auto;
+            font-size: 11px;
+            color: #bdc3c7;
+        }
+
+        .container {
+            display: flex;
+            height: calc(100vh - 60px);
+        }
+
+        .toolbar {
+            width: 280px;
+            background: var(--secondary-color);
+            padding: 0;
+            overflow-y: auto;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .workspace {
+            flex: 1;
+            position: relative;
+            background: #2d2d2d;
+            overflow: hidden;
+        }
+
+        #schemaCanvas {
+            display: block;
+            cursor: default;
+            background: #2d2d2d;
+        }
+
+        .status-info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(44, 62, 80, 0.9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            pointer-events: none;
+            backdrop-filter: blur(5px);
+        }
+
+        /* Стили для библиотек компонентов */
+        .library-section {
+            margin: 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .library-header {
+            padding: 12px 15px;
+            background: var(--primary-color);
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .library-header:hover {
+            background: #2f4050;
+        }
+
+        .library-content {
+            padding: 10px;
+            background: var(--secondary-color);
+        }
+
+        .component {
+            cursor: grab;
+            padding: 8px 10px;
+            margin: 5px 0;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: #3a5169;
+            transition: all 0.2s;
+            font-size: 11px;
+        }
+
+        .component:hover {
+            background: var(--accent-color);
+            border-color: var(--accent-color);
+            transform: translateX(3px);
+        }
+
+        .component:active {
+            cursor: grabbing;
+        }
+
+
+
+        /* Модальные окна */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background: var(--primary-color);
+            margin: 2% auto;
+            padding: 0;
+            border-radius: 8px;
+            width: 95%;
+            height: 95%;
+            max-height: 95vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            padding: 15px 20px;
+            background: var(--secondary-color);
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-body {
+            flex: 1;
+            padding: 0;
+            display: flex;
+            overflow: hidden;
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover {
+            color: white;
+        }
+
+        /* Редактор компонентов */
+        .editor-container {
+            display: flex;
+            flex: 1;
+            height: 100%;
+            position: relative;
+        }
+
+        .symbol-editor {
+            flex: 1;
+            background: #2d2d2d;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: auto;
+            background: #2d2d2d;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .editor-toolbar {
+            padding: 10px;
+            background: var(--secondary-color);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .editor-properties {
+            width: 370px;
+            background: var(--secondary-color);
+            padding: 15px;
+            overflow-y: auto;
+            position: relative;
+            z-index: 2;
+        }
+
+        #symbolCanvas {
+            display: block;
+            background: #2d2d2d;
+            cursor: crosshair;
+        }
+
+        .tool-button {
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--primary-color);
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+
+        .tool-button:hover {
+            background: var(--accent-color);
+        }
+
+        .tool-button.active {
+            background: var(--accent-color);
+            border-color: var(--accent-color);
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            font-size: 12px;
+        }
+
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--primary-color);
+            color: var(--text-color);
+            box-sizing: border-box;
+            font-size: 12px;
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: var(--accent-color);
+            color: white;
+        }
+
+
+        .btn-danger {
+            background: var(--danger-color);
+            color: white;
+        }
+
+        .btn-success {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .btn-warning {
+            background: var(--warning-color);
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        /* Вкладки */
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--primary-color);
+        }
+
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s;
+            font-size: 12px;
+        }
+
+        .tab.active {
+            border-bottom-color: var(--accent-color);
+            background: var(--secondary-color);
+        }
+
+        .tab-content {
+            display: none;
+            padding: 15px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Сетка */
+        .grid-controls {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .grid-controls h4 {
+            margin: 0 0 10px 0;
+            color: var(--accent-color);
+            font-size: 14px;
+        }
+
+        .grid-options {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .grid-option {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+        }
+
+        /* Список пинов */
+        .pins-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 10px;
+            background: var(--primary-color);
+        }
+
+        .pin-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px;
+            margin-bottom: 5px;
+            background: #3a5169;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        .pin-item:hover {
+            background: #4a6179;
+        }
+
+        .pin-info {
+            flex: 1;
+        }
+
+        .pin-actions {
+            display: flex;
+            gap: 5px;
+        }
+
+        .pin-action {
+            background: none;
+            border: none;
+            color: var(--text-color);
+            cursor: pointer;
+            padding: 2px 5px;
+            border-radius: 2px;
+            font-size: 10px;
+        }
+
+        .pin-action:hover {
+            background: var(--accent-color);
+        }
+
+        /* Предпросмотр символа */
+        .symbol-preview {
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 10px;
+            background: #2d2d2d;
+            margin-top: 10px;
+        }
+
+        #previewCanvas {
+            display: block;
+            background: #2d2d2d;
+        }
+
+        /* Подсказки в редакторе */
+        .editor-hint {
+            position: absolute;
+            top: 50px;
+            left: 10px;
+            background: rgba(44, 62, 80, 0.9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            pointer-events: none;
+            backdrop-filter: blur(5px);
+            z-index: 10;
+        }
+    </style>
 </head>
 <body>
-<div class="container">
-    <h1>Размещение элементов (мини-CAD)</h1>
+    <div class="controls">
+        <button onclick="saveSchema()">💾 Сохранить схему</button>
+        <button onclick="loadSchema()">📂 Загрузить схему</button>
+        <button onclick="clearSchema()">🗑 Очистить</button>
+        <button onclick="showSymbolEditor()">🎨 Создать компонент</button>
 
-    <div class="top-row">
-        <!-- Поле размещения -->
-        <div class="panel">
-            <h2>Коммутационное поле</h2>
-            <canvas id="boardCanvas"></canvas>
-            <div class="ga-info">
-                <div>Fitness: <span id="fitnessValue">—</span></div>
-                <div>Σ длина: <span id="totalLengthValue">—</span></div>
-                <div>max длина: <span id="maxLengthValue">—</span></div>
+
+
+        <select id="modeSelect" onchange="changeMode(this.value)">
+            <option value="select">🔍 Выбор</option>
+            <option value="wire">🔌 Провод</option>
+            <option value="delete">❌ Удаление</option>
+        </select>
+
+        <div class="help-text">
+            Shift + перетаскивание - панорамирование | Колесо мыши - зум | Delete - удаление
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="toolbar">
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('libraries')">📚 Библиотеки</div>
+                <div class="tab" onclick="switchTab('custom')">🎨 Пользовательские</div>
+            </div>
+
+            <div class="tab-content active" id="libraries-tab">
+                <div id="librariesList">
+                    <!-- Библиотеки будут загружены через JavaScript -->
+                </div>
+            </div>
+
+            <div class="tab-content" id="custom-tab">
+                <div style="padding: 15px;">
+                    <button onclick="showSymbolEditor()" class="btn btn-primary" style="width: 100%; margin-bottom: 15px;">
+                        🎨 Создать новый компонент
+                    </button>
+                    <div id="customComponentsList">
+                        <!-- Пользовательские компоненты -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid-controls">
+                <h4>🎯 Сетка</h4>
+                <div class="grid-options">
+                    <div class="grid-option">
+                        <input type="checkbox" id="gridToggle" checked onchange="toggleGrid()">
+                        <label for="gridToggle">Показать</label>
+                    </div>
+                    <div class="grid-option">
+                        <select id="gridSize" onchange="changeGridSize(this.value)" style="padding: 3px; font-size: 11px;">
+                            <option value="10">10px</option>
+                            <option value="20" selected>20px</option>
+                            <option value="25">25px</option>
+                            <option value="50">50px</option>
+                        </select>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Правая панель -->
-        <div class="panel control-panel">
-            <h2>Классы, элементы и связи</h2>
-
-            <div class="block">
-                <h3>Классы компонентов</h3>
-                <ul id="templatesList"></ul>
+        <div class="workspace">
+            <canvas id="schemaCanvas" width="1600" height="1200"></canvas>
+            <div class="status-info" id="statusInfo">
+                Масштаб: 100% | Сетка: 20px | Режим: Выбор
             </div>
+        </div>
+    </div>
 
-            <div class="block">
-                <h3>Экземпляры (элементы)</h3>
-                <div class="form-row">
-                    <label>Класс</label>
-                    <select id="templateSelect"></select>
-                </div>
-                <div class="form-row">
-                    <label>Имя элемента</label>
-                    <input type="text" id="elementName" placeholder="R1, R2, U1...">
-                </div>
-                <button id="addElementBtn">Добавить элемент</button>
-                <ul id="elementsList"></ul>
+    <!-- Модальное окно графического редактора символов -->
+    <div id="symbolEditorModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 style="margin: 0;">🎨 Графический редактор компонентов</h3>
+                <span class="close" onclick="closeSymbolEditor()">&times;</span>
             </div>
+            <div class="modal-body">
+                <div class="editor-container">
+                    <div class="symbol-editor">
+                        <div class="editor-toolbar">
+                            <button class="tool-button active" onclick="setTool('line')" id="tool-line">📏 Линия (только прямые)</button>
+                            <button class="tool-button" onclick="setTool('rectangle')" id="tool-rectangle">⬜️ Прямоугольник</button>
+                            <button class="tool-button" onclick="setTool('circle')" id="tool-circle">⭕️ Круг</button>
+                            <button class="tool-button" onclick="setTool('pin')" id="tool-pin">📌 Пин</button>
+                            <button class="tool-button" onclick="undo()" id="tool-undo">↶ Отменить</button>
+                            <button class="tool-button" onclick="redo()" id="tool-redo">↷ Повторить</button>
+                            <button class="tool-button btn-danger" onclick="clearSymbol()">🗑 Очистить</button>
 
-            <div class="block">
-                <h3>Связи</h3>
-                <div class="form-row">
-                    <label>От</label>
-                    <select id="connFrom"></select>
-                </div>
-                <div class="form-row">
-                    <label>К</label>
-                    <select id="connTo"></select>
-                </div>
-                <button id="addConnectionBtn">Добавить связь</button>
-                <ul id="connectionsList"></ul>
-            </div>
 
-            <div class="block">
-                <h3>Оптимизация размещения</h3>
-                <div class="form-row">
-                    <label>Шагов (последов.) / поколений (ГА)</label>
-                    <input type="number" id="steps" value="2000">
-                </div>
-                <div class="form-row">
-                    <label>Популяция (ГА)</label>
-                    <input type="number" id="popSize" value="40">
-                </div>
-                <div class="form-row">
-                    <label>P<sub>crossover</sub> (ГА)</label>
-                    <input type="number" step="0.01" id="pcross" value="0.8">
-                </div>
-                <div class="form-row">
-                    <label>P<sub>mutation</sub> (ГА)</label>
-                    <input type="number" step="0.01" id="pmut" value="0.05">
-                </div>
-                <div class="form-row">
-                    <label>α</label>
-                    <input type="number" step="0.1" id="alpha" value="0.5">
-                </div>
-                <div class="form-row">
-                    <label>β</label>
-                    <input type="number" step="0.1" id="beta" value="0.5">
-                </div>
-                <div class="buttons-row">
-                    <button id="runSeqBtn">Последовательный алгоритм</button>
-                    <button id="runGaBtn">Параллельный ГА</button>
+
+                            <div style="margin-left: auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                                <label style="font-size: 11px;">Цвет:</label>
+                                <input type="color" id="colorPicker" value="#3498db" style="width: 30px; height: 30px;">
+                                <label style="font-size: 11px;">Толщина:</label>
+                                <select id="lineWidth" style="padding: 3px; font-size: 11px;">
+                                    <option value="1">1px</option>
+                                    <option value="2" selected>2px</option>
+                                    <option value="3">3px</option>
+                                    <option value="4">4px</option>
+                                </select>
+                                <div class="grid-option" style="margin-left: 10px;">
+
+                                </div>
+                            </div>
+                        </div>
+                        <div class="editor-hint" id="editorHint">
+                            📏 Линии рисуются только горизонтально или вертикально
+                        </div>
+                            <div class="canvas-container">
+                                <canvas id="symbolCanvas" width="1400" height="800"></canvas>
+                            </div>
+                        </div>
+
+                    <div class="editor-properties">
+                        <div class="form-group">
+                            <label for="compName">Название компонента:</label>
+                            <input type="text" id="compName" placeholder="Например: Моя микросхема">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="compReference">Префикс (Reference):</label>
+                            <input type="text" id="compReference" placeholder="Например: U, R, C, Q" value="U">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Пины компонента:</label>
+                            <div class="pins-list" id="pinsContainer">
+                                <!-- Пины будут добавляться здесь -->
+                            </div>
+                            <div style="margin-top: 10px;">
+                                <button type="button" onclick="addPinManually()" class="btn btn-primary" style="font-size: 11px; padding: 5px 10px;">
+                                    ➕ Добавить пин вручную
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Предпросмотр символа:</label>
+                            <div class="symbol-preview">
+                                <canvas id="previewCanvas" width="200" height="150"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>SVG Path (автогенерация):</label>
+                            <textarea id="svgPath" rows="3" readonly style="background: #2d2d2d; font-family: monospace; font-size: 10px;"></textarea>
+                            <small style="color: #bdc3c7; font-size: 10px;">SVG path генерируется автоматически при рисовании</small>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" onclick="closeSymbolEditor()" class="btn">Отмена</button>
+                            <button type="button" onclick="saveSymbolComponent()" class="btn btn-success">Сохранить компонент</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Конструктор класса компонента -->
-    <div class="bottom-row panel">
-        <h2>Конструктор класса компонента (рисование по точкам)</h2>
-        <div class="constructor-row">
-            <canvas id="componentCanvas"></canvas>
-            <div class="constructor-controls">
-                <div class="form-row">
-                    <label>Имя класса</label>
-                    <input type="text" id="compName" placeholder="Resistor, IC, Transistor...">
-                </div>
-                <div class="form-row">
-                    <label>Ширина (в позициях)</label>
-                    <input type="number" id="compCellsX" value="1" min="1">
-                </div>
-                <div class="form-row">
-                    <label>Высота (в позициях)</label>
-                    <input type="number" id="compCellsY" value="1" min="1">
-                </div>
-                <p class="hint">
-                    Кликни по холсту, чтобы ставить точки. Линии автоматически соединяют точки.
-                    «Завершить» замыкает многоугольник.
-                </p>
-                <button id="finishComponentBtn">Завершить класс</button>
-                <button id="saveComponentBtn">Сохранить класс</button>
-                <button id="clearComponentBtn">Очистить</button>
-                <p>Точек: <span id="pointsCount">0</span></p>
-            </div>
-        </div>
-    </div>
-</div>
-
-<script src="/static/app.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
+</html>
 </html>
