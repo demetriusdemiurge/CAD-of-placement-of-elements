@@ -26,6 +26,12 @@ class KiCadWebEditor {
         this.statusInfo = document.getElementById('statusInfo');
         this.nextComponentId = 1;
 
+        // Новые свойства для сетки размещения
+        this.placementGrid = [];
+        this.showPlacementGrid = false;
+        this.baseGridSize = 50; // Размер одной позиции в пикселях
+        this.componentGridPositions = new Map(); // Хранит размеры в позициях
+
         this.init();
     }
 
@@ -129,46 +135,83 @@ class KiCadWebEditor {
         }
     }
 
-    addComponent(libraryKey, componentKey) {
-        console.log('Adding component:', libraryKey, componentKey);
+addComponent(libraryKey, componentKey) {
+    console.log('Adding component:', libraryKey, componentKey);
 
-        let componentDef;
+    let componentDef;
 
-        if (libraryKey === 'custom') {
-            // Для пользовательских компонентов - прямой доступ к объекту
-            componentDef = this.customComponents[componentKey];
-        } else {
-            // Для базовых компонентов - доступ через библиотеку и components
-            const library = this.libraries[libraryKey];
-            if (library && library.components) {
-                componentDef = library.components[componentKey];
-            }
+    if (libraryKey === 'custom') {
+        componentDef = this.customComponents[componentKey];
+    } else {
+        const library = this.libraries[libraryKey];
+        if (library && library.components) {
+            componentDef = library.components[componentKey];
         }
-
-        if (!componentDef) {
-            console.error('Component not found:', componentKey, 'in library:', libraryKey);
-            console.error('Available custom components:', Object.keys(this.customComponents));
-            console.error('Available libraries:', Object.keys(this.libraries));
-            return;
-        }
-
-        const gridCoords = this.getGridCoordinates(300, 300);
-
-        const component = {
-            id: `comp_${this.nextComponentId++}`,
-            library: libraryKey,
-            type: componentKey,
-            x: gridCoords.x,
-            y: gridCoords.y,
-            rotation: 0,
-            reference: this.generateNextReference(componentDef.reference),
-            ...componentDef
-        };
-
-        console.log('Created component:', component);
-        this.components.push(component);
-        this.render();
     }
+
+    if (!componentDef) {
+        console.error('Component not found:', componentKey, 'in library:', libraryKey);
+        return;
+    }
+
+    const gridCoords = this.getGridCoordinates(300, 300);
+
+    const component = {
+        id: `comp_${this.nextComponentId++}`,
+        library: libraryKey,
+        type: componentKey,
+        x: gridCoords.x,
+        y: gridCoords.y,
+        rotation: 0,
+        reference: this.generateNextReference(componentDef.reference),
+        ...componentDef
+    };
+
+    // Если у компонента нет размеров, вычисляем их приблизительно
+    if (!component.dimensions) {
+        component.dimensions = this.estimateComponentDimensions(component);
+    }
+
+    console.log('Created component:', component);
+    this.components.push(component);
+    this.render();
+}
+
+// Оценочный расчет размеров для стандартных компонентов
+estimateComponentDimensions(component) {
+    // Более точные размеры для лучшего размещения
+    const baseSizes = {
+        'resistor': { width: 80, height: 30 },
+        'capacitor': { width: 60, height: 40 },
+        'capacitor_polarized': { width: 60, height: 50 },
+        'diode': { width: 70, height: 40 },
+        'led': { width: 50, height: 50 },
+        'transistor_npn': { width: 80, height: 100 },
+        'transistor_pnp': { width: 80, height: 100 },
+        'vcc': { width: 40, height: 50 },
+        'gnd': { width: 40, height: 50 }
+    };
+
+    const baseSize = baseSizes[component.type] || { width: 60, height: 60 };
+
+    // Учитываем пины для более точного расчета
+    if (component.pins && component.pins.length > 0) {
+        let minX = 0, maxX = 0, minY = 0, maxY = 0;
+        component.pins.forEach(pin => {
+            minX = Math.min(minX, pin.x);
+            maxX = Math.max(maxX, pin.x);
+            minY = Math.min(minY, pin.y);
+            maxY = Math.max(maxY, pin.y);
+        });
+
+        return {
+            width: Math.max(baseSize.width, maxX - minX + 40),
+            height: Math.max(baseSize.height, maxY - minY + 40)
+        };
+    }
+
+    return baseSize;
+}
 
     generateNextReference(prefix) {
         const existing = this.components.filter(c => c.reference.startsWith(prefix));
@@ -480,21 +523,6 @@ class KiCadWebEditor {
         return null;
     }
 
-    render() {
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-        this.renderGrid();
-
-        this.ctx.save();
-        this.ctx.translate(this.offsetX, this.offsetY);
-        this.ctx.scale(this.scale, this.scale);
-
-        this.renderWires();
-        this.renderComponents();
-
-        this.ctx.restore();
-    }
-
     findWireAt(x, y) {
         const tolerance = 6; // допустимое расстояние до линии для клика
         for (const wire of this.wires) {
@@ -666,6 +694,24 @@ class KiCadWebEditor {
         this.render();
     }
 
+    render() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        this.renderGrid();
+
+        this.ctx.save();
+        this.ctx.translate(this.offsetX, this.offsetY);
+        this.ctx.scale(this.scale, this.scale);
+
+        this.renderWires();
+        this.renderComponents();
+
+        this.ctx.restore();
+
+        // Рендерим сетку поверх всего
+        this.renderPlacementGrid();
+    }
+
     async saveSchema() {
         const schema = {
             id: 'current',
@@ -794,6 +840,1333 @@ class KiCadWebEditor {
             }
         }
     }
+
+    // Основной метод оптимизации размещения
+optimizePlacement() {
+    if (this.placementGrid.length === 0) {
+        alert('Сначала создайте сетку позиций');
+        return;
+    }
+
+    console.log('=== ЗАПУСК ПОСЛЕДОВАТЕЛЬНОГО АЛГОРИТМА РАЗМЕЩЕНИЯ ===');
+
+    // Замер времени выполнения
+    const startTime = performance.now();
+
+    // Запускаем последовательный алгоритм
+    this.sequentialConnectivityPlacement();
+
+    const endTime = performance.now();
+    const executionTime = (endTime - startTime) / 1000;
+
+    console.log(`Алгоритм выполнен за ${executionTime.toFixed(2)} секунд`);
+
+    // Показываем результаты
+    this.showPlacementResults();
+}
+
+// Показать результаты размещения
+showPlacementResults() {
+    const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp));
+    const unplacedComponents = this.getUnplacedComponents();
+    const totalConnections = this.calculateTotalConnections();
+    const totalWireLength = this.estimateTotalWireLength();
+
+    let results = `Результаты размещения:\n\n`;
+    results += `Размещено компонентов: ${placedComponents.length}/${this.components.length}\n`;
+    results += `Общее количество связей: ${totalConnections}\n`;
+    results += `Оценочная длина соединений: ${totalWireLength.toFixed(1)} усл.ед.\n\n`;
+
+    if (unplacedComponents.length > 0) {
+        results += `Не размещены:\n`;
+        unplacedComponents.forEach(comp => {
+            results += `• ${comp.name}\n`;
+        });
+    }
+
+    alert(results);
+}
+
+// Расчет общей длины соединений (оценочно)
+estimateTotalWireLength() {
+    let totalLength = 0;
+    const connectionMatrix = this.buildConnectionMatrix();
+
+    for (let i = 0; i < this.components.length; i++) {
+        for (let j = i + 1; j < this.components.length; j++) {
+            const comp1 = this.components[i];
+            const comp2 = this.components[j];
+            const weight = connectionMatrix[comp1.id]?.[comp2.id] || 0;
+
+            if (weight > 0 && this.isComponentPlaced(comp1) && this.isComponentPlaced(comp2)) {
+                const pos1 = this.findComponentPosition(comp1);
+                const pos2 = this.findComponentPosition(comp2);
+                if (pos1 && pos2) {
+                    const distance = this.calculateManhattanDistance(pos1, pos2);
+                    totalLength += weight * distance;
+                }
+            }
+        }
+    }
+
+    return totalLength;
+}
+
+// Расчет общего количества связей
+calculateTotalConnections() {
+    const connectionMatrix = this.buildConnectionMatrix();
+    let total = 0;
+
+    this.components.forEach(comp1 => {
+        this.components.forEach(comp2 => {
+            if (comp1.id !== comp2.id) {
+                total += connectionMatrix[comp1.id]?.[comp2.id] || 0;
+            }
+        });
+    });
+
+    return total / 2; // Каждая связь учтена дважды
+}
+
+    // Построение матрицы связей
+    buildConnectionMatrix() {
+        const matrix = {};
+        const compIds = this.components.map(c => c.id);
+
+        // Инициализация матрицы
+        compIds.forEach(id1 => {
+            matrix[id1] = {};
+            compIds.forEach(id2 => {
+                matrix[id1][id2] = 0;
+            });
+        });
+
+        // Заполнение матрицы на основе проводов
+        this.wires.forEach(wire => {
+            const startComp = wire.start.component;
+            const endComp = wire.end.component;
+
+            if (startComp && endComp && startComp.id !== endComp.id) {
+                matrix[startComp.id][endComp.id]++;
+                matrix[endComp.id][startComp.id]++;
+            }
+        });
+
+        return matrix;
+    }
+
+    // Сортировка компонентов по количеству связей (в порядке убывания)
+    sortComponentsByConnections(connectionMatrix) {
+        return this.components.slice().sort((a, b) => {
+            const connectionsA = this.getTotalConnections(a.id, connectionMatrix);
+            const connectionsB = this.getTotalConnections(b.id, connectionMatrix);
+            return connectionsB - connectionsA;
+        });
+    }
+
+    // Получение общего количества связей компонента
+    getTotalConnections(compId, connectionMatrix) {
+        return Object.values(connectionMatrix[compId] || {}).reduce((sum, count) => sum + count, 0);
+    }
+
+    sequentialPlacement(sortedComponents, connectionMatrix) {
+        // Очищаем сетку
+        this.clearGrid();
+
+        // Размещаем компоненты в порядке убывания связей
+        for (const component of sortedComponents) {
+            const bestPosition = this.findBestPositionForLargeComponent(component, connectionMatrix);
+            if (bestPosition) {
+                this.placeComponent(component, bestPosition);
+            } else {
+                console.warn(`Не удалось разместить компонент: ${component.name}`);
+                // Размещаем в первой доступной позиции
+                const anyPosition = this.findAnyFreePositionForComponent(component); // Используем переименованный метод
+                if (anyPosition) {
+                    this.placeComponent(component, anyPosition);
+                }
+            }
+        }
+    }
+
+    // Поиск лучшей позиции для большого компонента
+    findBestPositionForLargeComponent(component, connectionMatrix) {
+        let bestScore = -Infinity;
+        let bestPosition = null;
+        const compConfig = this.componentGridPositions.get(component);
+
+        // Перебираем все возможные стартовые позиции
+        for (const position of this.placementGrid) {
+            if (this.canPlaceComponent(component, position)) {
+                const score = this.calculatePlacementScoreForLargeComponent(
+                    component, position, connectionMatrix, compConfig
+                );
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestPosition = position;
+                }
+            }
+        }
+
+        return bestPosition;
+    }
+
+    // Расчет оценки позиции для большого компонента
+    calculatePlacementScoreForLargeComponent(component, position, connectionMatrix, compConfig) {
+        let score = 0;
+
+        // Учитываем связи с уже размещенными компонентами
+        this.components.forEach(otherComp => {
+            if (otherComp !== component && this.isComponentPlaced(otherComp)) {
+                const connectionWeight = connectionMatrix[component.id][otherComp.id] || 0;
+                if (connectionWeight > 0) {
+                    const distance = this.calculateCenterToCenterDistance(component, position, otherComp, compConfig);
+                    score += connectionWeight / (distance + 1);
+                }
+            }
+        });
+
+        // Штраф за близость к краю (для больших компонентов это важно)
+        const edgePenalty = this.calculateEdgePenalty(position, compConfig);
+        score -= edgePenalty;
+
+        // Бонус за компактность размещения
+        const compactnessBonus = this.calculateCompactnessBonus(position, connectionMatrix, component);
+        score += compactnessBonus;
+
+        return score;
+    }
+
+    // Расчет расстояния между центрами компонентов
+    calculateCenterToCenterDistance(comp1, position1, comp2, comp1Config) {
+        const pos2 = this.findComponentPosition(comp2);
+        if (!pos2) return Infinity;
+
+        const comp2Config = this.componentGridPositions.get(comp2);
+        if (!comp2Config) return Infinity;
+
+        // Центр первого компонента
+        const center1 = {
+            col: position1.col + comp1Config.width / 2,
+            row: position1.row + comp1Config.height / 2
+        };
+
+        // Центр второго компонента
+        const center2 = {
+            col: pos2.col + comp2Config.width / 2,
+            row: pos2.row + comp2Config.height / 2
+        };
+
+        // Евклидово расстояние между центрами
+        return Math.sqrt(
+            Math.pow(center1.col - center2.col, 2) +
+            Math.pow(center1.row - center2.row, 2)
+        );
+    }
+
+    // Штраф за близость к краю (для больших компонентов)
+    calculateEdgePenalty(position, compConfig) {
+        const gridCols = this.getGridColumns();
+        const gridRows = this.getGridRows();
+
+        const distanceToLeft = position.col;
+        const distanceToRight = gridCols - (position.col + compConfig.width);
+        const distanceToTop = position.row;
+        const distanceToBottom = gridRows - (position.row + compConfig.height);
+
+        const minDistanceToEdge = Math.min(
+            distanceToLeft, distanceToRight, distanceToTop, distanceToBottom
+        );
+
+        // Больший штраф за близость к краю для больших компонентов
+        return (compConfig.area * 0.1) / (minDistanceToEdge + 1);
+    }
+
+    // Бонус за компактность (размещение рядом с связанными компонентами)
+    calculateCompactnessBonus(position, connectionMatrix, component) {
+        let bonus = 0;
+        const compConfig = this.componentGridPositions.get(component);
+
+        this.components.forEach(otherComp => {
+            if (otherComp !== component && this.isComponentPlaced(otherComp)) {
+                const connectionWeight = connectionMatrix[component.id][otherComp.id] || 0;
+                if (connectionWeight > 0) {
+                    const otherPos = this.findComponentPosition(otherComp);
+                    const otherConfig = this.componentGridPositions.get(otherComp);
+
+                    if (otherPos && otherConfig) {
+                        const distance = this.calculateCenterToCenterDistance(
+                            component, position, otherComp, compConfig
+                        );
+
+                        // Бонус за близкое размещение
+                        if (distance < 3) {
+                            bonus += connectionWeight * 2;
+                        } else if (distance < 6) {
+                            bonus += connectionWeight;
+                        }
+                    }
+                }
+            }
+        });
+
+        return bonus;
+    }
+
+    // Генерация позиций для поиска по спирали от центра
+    generateSpiralSearchOrder() {
+        const centerCol = Math.floor(this.getGridColumns() / 2);
+        const centerRow = Math.floor(this.getGridRows() / 2);
+
+        const positions = [];
+        const maxRadius = Math.max(this.getGridColumns(), this.getGridRows());
+
+        for (let radius = 0; radius < maxRadius; radius++) {
+            for (let angle = 0; angle < 360; angle += 45) {
+                const rad = angle * Math.PI / 180;
+                const col = Math.round(centerCol + radius * Math.cos(rad));
+                const row = Math.round(centerRow + radius * Math.sin(rad));
+
+                const position = this.findGridPosition(col, row);
+                if (position) {
+                    positions.push(position);
+                }
+            }
+        }
+
+        return positions;
+    }
+
+    // Поиск центральной позиции
+    findCenterPosition() {
+        const centerCol = Math.floor(this.getGridColumns() / 2);
+        const centerRow = Math.floor(this.getGridRows() / 2);
+        return this.findGridPosition(centerCol, centerRow);
+    }
+
+    // Поиск лучшей позиции для компонента
+    findBestPosition(component, connectionMatrix) {
+        let bestScore = -Infinity;
+        let bestPosition = null;
+
+        // Перебираем все свободные позиции
+        for (const position of this.placementGrid) {
+            if (this.canPlaceComponent(component, position)) {
+                const score = this.calculatePlacementScore(component, position, connectionMatrix);
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestPosition = position;
+                }
+            }
+        }
+
+        // Если не нашли подходящую позицию, ищем любую свободную
+        if (!bestPosition) {
+            bestPosition = this.findAnyFreePosition(component);
+        }
+
+        return bestPosition;
+    }
+
+    // Расчет оценки позиции
+    calculatePlacementScore(component, position, connectionMatrix) {
+        let score = 0;
+        const compSize = this.componentGridPositions.get(component);
+
+        // Учитываем связи с уже размещенными компонентами
+        this.components.forEach(otherComp => {
+            if (otherComp !== component && this.isComponentPlaced(otherComp)) {
+                const connectionWeight = connectionMatrix[component.id][otherComp.id] || 0;
+                if (connectionWeight > 0) {
+                    const distance = this.calculateGridDistance(component, position, otherComp);
+                    score += connectionWeight / (distance + 1);
+                }
+            }
+        });
+
+        // Предпочтение центральным позициям
+        const centerCol = Math.floor(this.getGridColumns() / 2);
+        const centerRow = Math.floor(this.getGridRows() / 2);
+        const distanceToCenter = Math.abs(position.col - centerCol) + Math.abs(position.row - centerRow);
+        score -= distanceToCenter * 0.1;
+
+        return score;
+    }
+
+    // Расчет расстояния между компонентами в сетке
+    calculateGridDistance(comp1, position1, comp2) {
+        const pos2 = this.findComponentPosition(comp2);
+        if (!pos2) return Infinity;
+
+        // Манхэттенское расстояние между центрами
+        const comp1Size = this.componentGridPositions.get(comp1);
+        const comp2Size = this.componentGridPositions.get(comp2);
+
+        const center1 = {
+            col: position1.col + comp1Size.width / 2,
+            row: position1.row + comp1Size.height / 2
+        };
+
+        const center2 = {
+            col: pos2.col + comp2Size.width / 2,
+            row: pos2.row + comp2Size.height / 2
+        };
+
+        return Math.abs(center1.col - center2.col) + Math.abs(center1.row - center2.row);
+    }
+
+    // Итеративное улучшение размещения
+    improvePlacement(connectionMatrix) {
+        const maxIterations = 100;
+        let improved = true;
+        let iterations = 0;
+
+        while (improved && iterations < maxIterations) {
+            improved = false;
+
+            for (const component of this.components) {
+                const currentPosition = this.findComponentPosition(component);
+                if (!currentPosition) continue;
+
+                const currentScore = this.calculateTotalScore(connectionMatrix);
+
+                // Временно убираем компонент
+                this.removeComponentFromGrid(component);
+
+                // Ищем лучшее положение
+                const newPosition = this.findBestPosition(component, connectionMatrix);
+                this.placeComponent(component, newPosition);
+
+                const newScore = this.calculateTotalScore(connectionMatrix);
+
+                // Если не улучшилось, возвращаем на место
+                if (newScore <= currentScore) {
+                    this.removeComponentFromGrid(component);
+                    this.placeComponent(component, currentPosition);
+                } else {
+                    improved = true;
+                    console.log(`Улучшение на итерации ${iterations}: ${newScore - currentScore}`);
+                }
+            }
+
+            iterations++;
+        }
+
+        console.log(`Оптимизация завершена за ${iterations} итераций`);
+    }
+
+    // Расчет общей оценки размещения
+    calculateTotalScore(connectionMatrix) {
+        let totalScore = 0;
+
+        for (let i = 0; i < this.components.length; i++) {
+            for (let j = i + 1; j < this.components.length; j++) {
+                const comp1 = this.components[i];
+                const comp2 = this.components[j];
+
+                const connectionWeight = connectionMatrix[comp1.id][comp2.id] || 0;
+                if (connectionWeight > 0) {
+                    const distance = this.calculateGridDistance(comp1, this.findComponentPosition(comp1), comp2);
+                    totalScore += connectionWeight / (distance + 1);
+                }
+            }
+        }
+
+        return totalScore;
+    }
+
+    // Вспомогательные методы
+    findGridPosition(col, row) {
+        return this.placementGrid.find(pos => pos.col === col && pos.row === row);
+    }
+
+    findComponentPosition(component) {
+        return this.placementGrid.find(pos => pos.component === component);
+    }
+
+    isComponentPlaced(component) {
+        return this.findComponentPosition(component) !== undefined;
+    }
+
+
+    clearGrid() {
+        this.placementGrid.forEach(pos => {
+            pos.occupied = false;
+            pos.component = null;
+        });
+        // Сбрасываем позиции компонентов
+        this.components.forEach(comp => {
+            comp.x = 100;
+            comp.y = 100;
+        });
+    }
+
+    getGridColumns() {
+        const maxCol = Math.max(...this.placementGrid.map(pos => pos.col));
+        return maxCol + 1;
+    }
+
+    getGridRows() {
+        const maxRow = Math.max(...this.placementGrid.map(pos => pos.row));
+        return maxRow + 1;
+    }
+
+    // Переименуем этот метод
+    findAnyFreePositionForComponent(component) {
+        // Сначала ищем в центре
+        const centerPosition = this.findCenterPosition();
+        if (this.canPlaceComponent(component, centerPosition)) {
+            return centerPosition;
+        }
+
+        // Затем ищем по спирали от центра
+        const spiralPositions = this.generateSpiralSearchOrder();
+        for (const position of spiralPositions) {
+            if (this.canPlaceComponent(component, position)) {
+                return position;
+            }
+        }
+
+        // Если ничего не нашли, возвращаем null
+        return null;
+    }
+
+    // А этот метод оставим как есть (используется в другом месте)
+    findAnyFreePosition(component) {
+        for (const position of this.placementGrid) {
+            if (this.canPlaceComponent(component, position)) {
+                return position;
+            }
+        }
+        return this.placementGrid[0]; // fallback
+    }
+
+    // Переключение отображения сетки
+    togglePlacementGrid() {
+        this.showPlacementGrid = !this.showPlacementGrid;
+        this.render();
+    }
+
+    // Поиск связанных групп компонентов
+    findConnectedGroups() {
+        const visited = new Set();
+        const groups = [];
+
+        this.components.forEach(comp => {
+            if (!visited.has(comp)) {
+                const group = {
+                    components: [],
+                    connectionCount: 0
+                };
+
+                this.traverseConnections(comp, visited, group);
+
+                if (group.components.length > 0) {
+                    groups.push(group);
+                }
+            }
+        });
+
+        return groups;
+    }
+
+    // Обход связей компонента
+    traverseConnections(component, visited, group) {
+        if (visited.has(component)) return;
+
+        visited.add(component);
+        group.components.push({
+            component: component,
+            positions: this.calculateGridPositions(component)
+        });
+
+        // Находим все компоненты, связанные с текущим
+        const connectedComponents = this.findConnectedComponents(component);
+
+        group.connectionCount += connectedComponents.length;
+
+        connectedComponents.forEach(connectedComp => {
+            if (!visited.has(connectedComp)) {
+                this.traverseConnections(connectedComp, visited, group);
+            }
+        });
+    }
+
+    // Поиск компонентов, связанных с данным
+    findConnectedComponents(component) {
+        const connected = new Set();
+
+        this.wires.forEach(wire => {
+            const startComp = wire.start.component;
+            const endComp = wire.end.component;
+
+            if (startComp === component && endComp && endComp !== component) {
+                connected.add(endComp);
+            }
+            if (endComp === component && startComp && startComp !== component) {
+                connected.add(startComp);
+            }
+        });
+
+        return Array.from(connected);
+    }
+
+    // Вычисление количества позиций для компонента
+    calculateGridPositions(component) {
+        if (!component.dimensions) return 1;
+
+        // Находим самый маленький компонент для базового размера
+        let minSize = Infinity;
+        this.components.forEach(comp => {
+            if (comp.dimensions) {
+                const largerSide = Math.max(comp.dimensions.width, comp.dimensions.height);
+                if (largerSide < minSize) {
+                    minSize = largerSide;
+                }
+            }
+        });
+
+        if (minSize === Infinity) return 1;
+
+        const largerSide = Math.max(component.dimensions.width, component.dimensions.height);
+        return Math.max(1, Math.round(largerSide / minSize));
+    }
+
+    // Применение размещения к компонентам
+    applyPlacement(placement, baseGridSize) {
+        placement.forEach(item => {
+            const comp = item.component;
+            comp.x = item.x;
+            comp.y = item.y;
+        });
+
+        this.render();
+    }
+
+    // Создание сетки позиций
+    createPlacementGrid() {
+        if (this.components.length === 0) {
+            alert('Нет компонентов для размещения');
+            return;
+        }
+
+        console.log('=== СОЗДАНИЕ СЕТКИ ПОЗИЦИЙ ===');
+        console.log(`Компонентов: ${this.components.length}`);
+
+        // 1. Определяем базовый размер позиции
+        this.calculateBaseGridSize();
+
+        // 2. Создаем сетку позиций на основе суммарного размера всех компонентов
+        this.generateGridPositions();
+
+        // 3. Визуализируем сетку
+        this.showPlacementGrid = true;
+        this.render();
+
+        // Показываем подробную статистику
+        this.showGridStats();
+    }
+
+    // Расчет базового размера позиции
+    calculateBaseGridSize() {
+        if (this.components.length === 0) {
+            this.baseGridSize = 50;
+            return;
+        }
+
+        // Находим самый маленький компонент
+        let minComponent = null;
+        let minSize = Infinity;
+
+        this.components.forEach(comp => {
+            const dimensions = this.getComponentDimensions(comp);
+            const largerSide = Math.max(dimensions.width, dimensions.height);
+            if (largerSide < minSize) {
+                minSize = largerSide;
+                minComponent = comp;
+            }
+        });
+
+        // Базовый размер = размер самого маленького компонента + отступы
+        this.baseGridSize = Math.max(40, minSize + 20);
+    }
+
+    // Генерация позиций сетки на основе суммарного размера всех компонентов
+generateGridPositions() {
+    this.placementGrid = [];
+    this.componentGridPositions = new Map();
+
+    // 1. Находим самый маленький компонент для базовой единицы
+    let minComponent = null;
+    let minSize = Infinity;
+
+    this.components.forEach(comp => {
+        const dimensions = this.getComponentDimensions(comp);
+        const largerSide = Math.max(dimensions.width, dimensions.height);
+        if (largerSide < minSize) {
+            minSize = largerSide;
+            minComponent = comp;
+        }
+    });
+
+    // Базовый размер = размер самого маленького компонента + отступы
+    this.baseGridSize = Math.max(40, minSize + 20);
+    console.log(`Базовый элемент: ${minComponent.name}, размер: ${minSize}px, размер позиции: ${this.baseGridSize}px`);
+
+    // 2. Вычисляем общее количество позиций = сумме размеров всех компонентов в базовых единицах
+    let totalPositionsNeeded = 0;
+
+    // Сначала вычисляем размеры всех компонентов в позициях и суммируем
+    this.components.forEach(comp => {
+        const dimensions = this.getComponentDimensions(comp);
+        const widthInPositions = Math.max(1, Math.ceil(dimensions.width / this.baseGridSize));
+        const heightInPositions = Math.max(1, Math.ceil(dimensions.height / this.baseGridSize));
+        const areaInPositions = widthInPositions * heightInPositions;
+
+        totalPositionsNeeded += areaInPositions;
+
+        // Сохраняем конфигурацию позиций для компонента
+        const positionConfigs = this.generatePositionConfigurations(widthInPositions, heightInPositions);
+
+        this.componentGridPositions.set(comp, {
+            width: widthInPositions,
+            height: heightInPositions,
+            area: areaInPositions,
+            positionConfigs: positionConfigs
+        });
+
+        console.log(`${comp.name}: ${dimensions.width}×${dimensions.height}px → ${widthInPositions}×${heightInPositions} = ${areaInPositions} позиций`);
+    });
+
+    console.log(`Всего нужно позиций: ${totalPositionsNeeded}`);
+
+    // 3. Создаем квадратную сетку, чтобы общее количество позиций было >= totalPositionsNeeded
+    const gridSide = Math.ceil(Math.sqrt(totalPositionsNeeded * 1.2)); // +20% для свободного места
+    const gridCols = Math.max(8, gridSide); // минимум 8 колонок
+    const gridRows = Math.max(6, gridSide); // минимум 6 строк
+
+    console.log(`Создаем сетку: ${gridCols}×${gridRows} = ${gridCols * gridRows} позиций`);
+
+    // 4. Создаем позиции сетки
+    const startX = 100;
+    const startY = 100;
+
+    for (let row = 0; row < gridRows; row++) {
+        for (let col = 0; col < gridCols; col++) {
+            this.placementGrid.push({
+                x: startX + col * this.baseGridSize,
+                y: startY + row * this.baseGridSize,
+                col: col,
+                row: row,
+                occupied: false,
+                component: null,
+                positionId: `${col},${row}`
+            });
+        }
+    }
+
+    console.log(`Создано ${this.placementGrid.length} позиций для ${this.components.length} компонентов`);
+}
+
+    // Генерация всех возможных конфигураций позиций для компонента
+    generatePositionConfigurations(width, height) {
+        const configs = [];
+
+        // Для прямоугольного компонента только одна конфигурация - прямоугольник
+        configs.push({
+            type: 'rectangle',
+            positions: this.generateRectanglePositions(width, height),
+            width: width,
+            height: height
+        });
+
+        return configs;
+    }
+
+    // Генерация позиций для прямоугольной области
+    generateRectanglePositions(width, height) {
+        const positions = [];
+        for (let row = 0; row < height; row++) {
+            for (let col = 0; col < width; col++) {
+                positions.push({ col, row });
+            }
+        }
+        return positions;
+    }
+
+    // Проверка возможности размещения компонента в конкретной позиции
+    canPlaceComponent(component, startPosition) {
+        const compConfig = this.componentGridPositions.get(component);
+        if (!compConfig) return false;
+
+        // Проверяем основную конфигурацию (прямоугольник)
+        const mainConfig = compConfig.positionConfigs[0];
+
+        for (const relativePos of mainConfig.positions) {
+            const targetCol = startPosition.col + relativePos.col;
+            const targetRow = startPosition.row + relativePos.row;
+
+            const gridPos = this.findGridPosition(targetCol, targetRow);
+            if (!gridPos || gridPos.occupied) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Размещение компонента с учетом его размеров
+    placeComponent(component, startPosition) {
+        const compConfig = this.componentGridPositions.get(component);
+        if (!compConfig || !startPosition) return false;
+
+        const mainConfig = compConfig.positionConfigs[0];
+
+        // Занимаем все позиции компонента
+        for (const relativePos of mainConfig.positions) {
+            const targetCol = startPosition.col + relativePos.col;
+            const targetRow = startPosition.row + relativePos.row;
+
+            const gridPos = this.findGridPosition(targetCol, targetRow);
+            if (gridPos) {
+                gridPos.occupied = true;
+                gridPos.component = component;
+            }
+        }
+
+        // Устанавливаем координаты компонента (центрируем)
+        component.x = startPosition.x + (compConfig.width * this.baseGridSize) / 2;
+        component.y = startPosition.y + (compConfig.height * this.baseGridSize) / 2;
+
+        // Сохраняем информацию о занятых позициях
+        component.gridPosition = {
+            startCol: startPosition.col,
+            startRow: startPosition.row,
+            width: compConfig.width,
+            height: compConfig.height
+        };
+
+        return true;
+    }
+
+    // Удаление компонента из сетки
+    removeComponentFromGrid(component) {
+        if (!component.gridPosition) return;
+
+        const { startCol, startRow, width, height } = component.gridPosition;
+
+        for (let row = 0; row < height; row++) {
+            for (let col = 0; col < width; col++) {
+                const gridPos = this.findGridPosition(startCol + col, startRow + row);
+                if (gridPos && gridPos.component === component) {
+                    gridPos.occupied = false;
+                    gridPos.component = null;
+                }
+            }
+        }
+
+        delete component.gridPosition;
+    }
+
+    // Получение размеров компонента
+    getComponentDimensions(component) {
+        if (component.dimensions) {
+            return component.dimensions;
+        }
+
+        // Расчет размеров по умолчанию
+        return this.estimateComponentDimensions(component);
+    }
+
+    // Визуализация сетки - более видная и красивая
+    renderPlacementGrid() {
+        if (!this.showPlacementGrid) return;
+
+        this.ctx.save();
+        this.ctx.translate(this.offsetX, this.offsetY);
+        this.ctx.scale(this.scale, this.scale);
+
+        // Фон сетки
+        this.ctx.fillStyle = 'rgba(30, 30, 30, 0.3)';
+        this.ctx.fillRect(
+            this.placementGrid[0]?.x || 100,
+            this.placementGrid[0]?.y || 100,
+            this.getGridColumns() * this.baseGridSize,
+            this.getGridRows() * this.baseGridSize
+        );
+
+        // Рисуем все позиции сетки
+        this.placementGrid.forEach(position => {
+            // Яркие цвета для занятых/свободных позиций
+            if (position.occupied) {
+                // Занятые позиции - красный с градиентом
+                const gradient = this.ctx.createRadialGradient(
+                    position.x + this.baseGridSize / 2,
+                    position.y + this.baseGridSize / 2,
+                    0,
+                    position.x + this.baseGridSize / 2,
+                    position.y + this.baseGridSize / 2,
+                    this.baseGridSize / 2
+                );
+                gradient.addColorStop(0, 'rgba(231, 76, 60, 0.8)');
+                gradient.addColorStop(1, 'rgba(192, 57, 43, 0.4)');
+                this.ctx.fillStyle = gradient;
+            } else {
+                // Свободные позиции - зеленый с градиентом
+                const gradient = this.ctx.createLinearGradient(
+                    position.x, position.y,
+                    position.x + this.baseGridSize, position.y + this.baseGridSize
+                );
+                gradient.addColorStop(0, 'rgba(46, 204, 113, 0.3)');
+                gradient.addColorStop(1, 'rgba(39, 174, 96, 0.1)');
+                this.ctx.fillStyle = gradient;
+            }
+
+            // Заливка позиции
+            this.ctx.fillRect(position.x, position.y, this.baseGridSize, this.baseGridSize);
+
+            // Границы позиций - более толстые и контрастные
+            this.ctx.strokeStyle = position.occupied ? 'rgba(231, 76, 60, 0.9)' : 'rgba(46, 204, 113, 0.7)';
+            this.ctx.lineWidth = position.occupied ? 2.5 : 1.5;
+            this.ctx.setLineDash([]); // Сплошные линии
+
+            this.ctx.strokeRect(position.x, position.y, this.baseGridSize, this.baseGridSize);
+
+            // Подсветка углов для лучшей видимости
+            this.ctx.strokeStyle = position.occupied ? 'rgba(231, 76, 60, 0.6)' : 'rgba(46, 204, 113, 0.4)';
+            this.ctx.lineWidth = 1;
+            this.ctx.beginPath();
+            // Левый верхний угол
+            this.ctx.moveTo(position.x, position.y);
+            this.ctx.lineTo(position.x + 8, position.y);
+            this.ctx.moveTo(position.x, position.y);
+            this.ctx.lineTo(position.x, position.y + 8);
+            // Правый верхний угол
+            this.ctx.moveTo(position.x + this.baseGridSize, position.y);
+            this.ctx.lineTo(position.x + this.baseGridSize - 8, position.y);
+            this.ctx.moveTo(position.x + this.baseGridSize, position.y);
+            this.ctx.lineTo(position.x + this.baseGridSize, position.y + 8);
+            // Левый нижний угол
+            this.ctx.moveTo(position.x, position.y + this.baseGridSize);
+            this.ctx.lineTo(position.x + 8, position.y + this.baseGridSize);
+            this.ctx.moveTo(position.x, position.y + this.baseGridSize);
+            this.ctx.lineTo(position.x, position.y + this.baseGridSize - 8);
+            // Правый нижний угол
+            this.ctx.moveTo(position.x + this.baseGridSize, position.y + this.baseGridSize);
+            this.ctx.lineTo(position.x + this.baseGridSize - 8, position.y + this.baseGridSize);
+            this.ctx.moveTo(position.x + this.baseGridSize, position.y + this.baseGridSize);
+            this.ctx.lineTo(position.x + this.baseGridSize, position.y + this.baseGridSize - 8);
+            this.ctx.stroke();
+
+            // Номера позиций - более крупные и читаемые
+            if (this.scale > 0.3) {
+                this.ctx.fillStyle = position.occupied ? '#ffffff' : '#ecf0f1';
+                this.ctx.font = this.scale > 0.7 ? 'bold 11px Arial' : 'bold 9px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+                this.ctx.shadowBlur = 3;
+                this.ctx.shadowOffsetX = 1;
+                this.ctx.shadowOffsetY = 1;
+
+                this.ctx.fillText(
+                    `${position.col},${position.row}`,
+                    position.x + this.baseGridSize / 2,
+                    position.y + this.baseGridSize / 2
+                );
+
+                // Сбрасываем тень
+                this.ctx.shadowColor = 'transparent';
+                this.ctx.shadowBlur = 0;
+                this.ctx.shadowOffsetX = 0;
+                this.ctx.shadowOffsetY = 0;
+            }
+        });
+
+        // Рисуем главные линии сетки (каждые 5 позиций)
+        this.drawMajorGridLines();
+
+        this.ctx.restore();
+
+        // Подсветка связей между компонентами (опционально)
+    if (this.scale > 0.3) {
+        this.highlightConnections();
+    }
+
+    this.ctx.restore();
+}
+
+// Подсветка связей между компонентами
+highlightConnections() {
+    const connectionMatrix = this.buildConnectionMatrix();
+
+    this.ctx.strokeStyle = 'rgba(155, 89, 182, 0.4)';
+    this.ctx.lineWidth = 1;
+    this.ctx.setLineDash([2, 2]);
+
+    for (let i = 0; i < this.components.length; i++) {
+        for (let j = i + 1; j < this.components.length; j++) {
+            const comp1 = this.components[i];
+            const comp2 = this.components[j];
+            const weight = connectionMatrix[comp1.id]?.[comp2.id] || 0;
+
+            if (weight > 0 && this.isComponentPlaced(comp1) && this.isComponentPlaced(comp2)) {
+                const pos1 = this.findComponentPosition(comp1);
+                const pos2 = this.findComponentPosition(comp2);
+
+                if (pos1 && pos2) {
+                    const center1 = {
+                        x: pos1.x + this.baseGridSize / 2,
+                        y: pos1.y + this.baseGridSize / 2
+                    };
+                    const center2 = {
+                        x: pos2.x + this.baseGridSize / 2,
+                        y: pos2.y + this.baseGridSize / 2
+                    };
+
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(center1.x, center1.y);
+                    this.ctx.lineTo(center2.x, center2.y);
+                    this.ctx.stroke();
+
+                    // Подпись веса связи
+                    if (this.scale > 0.7) {
+                        this.ctx.fillStyle = 'rgba(155, 89, 182, 0.8)';
+                        this.ctx.font = '10px Arial';
+                        this.ctx.textAlign = 'center';
+                        this.ctx.fillText(
+                            weight.toString(),
+                            (center1.x + center2.x) / 2,
+                            (center1.y + center2.y) / 2 - 5
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    this.ctx.setLineDash([]);
+
+    }
+
+    // Рисуем главные линии сетки
+    drawMajorGridLines() {
+        if (this.placementGrid.length === 0) return;
+
+        const gridCols = this.getGridColumns();
+        const gridRows = this.getGridRows();
+        const firstPos = this.placementGrid[0];
+
+        if (!firstPos) return;
+
+        this.ctx.strokeStyle = 'rgba(52, 152, 219, 0.4)';
+        this.ctx.lineWidth = 3;
+        this.ctx.setLineDash([8, 4]);
+
+        // Вертикальные главные линии
+        for (let col = 0; col <= gridCols; col += 5) {
+            const x = firstPos.x + col * this.baseGridSize;
+            this.ctx.beginPath();
+            this.ctx.moveTo(x, firstPos.y);
+            this.ctx.lineTo(x, firstPos.y + gridRows * this.baseGridSize);
+            this.ctx.stroke();
+        }
+
+        // Горизонтальные главные линии
+        for (let row = 0; row <= gridRows; row += 5) {
+            const y = firstPos.y + row * this.baseGridSize;
+            this.ctx.beginPath();
+            this.ctx.moveTo(firstPos.x, y);
+            this.ctx.lineTo(firstPos.x + gridCols * this.baseGridSize, y);
+            this.ctx.stroke();
+        }
+
+        this.ctx.setLineDash([]);
+    }
+
+    // Проверка, является ли позиция начальной для компонента
+    isStartPosition(position) {
+        if (!position.component || !position.component.gridPosition) return false;
+
+        const gridPos = position.component.gridPosition;
+        return position.col === gridPos.startCol && position.row === gridPos.startRow;
+    }
+
+    // Подсветка области большого компонента
+    highlightComponentArea(startPosition) {
+        const component = startPosition.component;
+        const compConfig = this.componentGridPositions.get(component);
+        if (!compConfig) return;
+
+        this.ctx.strokeStyle = 'rgba(52, 152, 219, 0.5)';
+        this.ctx.lineWidth = 3;
+        this.ctx.setLineDash([]);
+
+        this.ctx.strokeRect(
+            startPosition.x,
+            startPosition.y,
+            compConfig.width * this.baseGridSize,
+            compConfig.height * this.baseGridSize
+        );
+
+        // Подпись с размерами
+        if (this.scale > 0.5) {
+            this.ctx.fillStyle = 'rgba(52, 152, 219, 0.8)';
+            this.ctx.font = '12px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText(
+                `${compConfig.width}×${compConfig.height}`,
+                startPosition.x + (compConfig.width * this.baseGridSize) / 2,
+                startPosition.y + (compConfig.height * this.baseGridSize) / 2
+            );
+        }
+    }
+
+    // Последовательный алгоритм размещения по связности
+sequentialConnectivityPlacement() {
+    if (this.placementGrid.length === 0) {
+        alert('Сначала создайте сетку позиций');
+        return;
+    }
+
+    console.log('=== ПОСЛЕДОВАТЕЛЬНЫЙ АЛГОРИТМ РАЗМЕЩЕНИЯ ===');
+
+    // Очищаем предыдущее размещение
+    this.clearGrid();
+
+    // Пункт 1. Размещение директивных модулей (первый модуль в центр)
+    const firstComponent = this.components[0];
+    if (firstComponent) {
+        const centerPosition = this.findCenterPosition();
+        if (centerPosition && this.canPlaceComponent(firstComponent, centerPosition)) {
+            this.placeComponent(firstComponent, centerPosition);
+            console.log(`Директивный модуль размещен: ${firstComponent.name} в позиции (${centerPosition.col},${centerPosition.row})`);
+        }
+    }
+
+    // Основной цикл алгоритма
+    let step = 1;
+    const maxSteps = this.components.length * 2; // защита от бесконечного цикла
+
+    while (this.getUnplacedComponents().length > 0 && step <= maxSteps) {
+        console.log(`\n--- Шаг ${step} ---`);
+
+        // Пункт 2. Формирование массива позиций, соседних с занятыми
+        const neighborPositions = this.getNeighborPositions();
+        console.log(`Соседние позиции: ${neighborPositions.length}`);
+
+        if (neighborPositions.length === 0) {
+            console.log('Нет соседних позиций, размещаем в первую свободную');
+            this.placeRemainingComponents();
+            break;
+        }
+
+        // Пункт 3. Расчет оценки J для всех неразмещенных модулей
+        const unplacedComponents = this.getUnplacedComponents();
+        const jScores = this.calculateJScores(unplacedComponents);
+
+        if (jScores.length === 0) break;
+
+        // Пункт 4. Выбор модуля с максимальным значением оценки J
+        const bestComponent = this.selectComponentByMaxJ(jScores);
+        console.log(`Выбран модуль: ${bestComponent.name} (J=${jScores.find(score => score.component === bestComponent)?.score})`);
+
+        // Пункт 5. Расчет оценки F для каждой позиции, соседней с занятыми
+        const fScores = this.calculateFScores(bestComponent, neighborPositions);
+
+        if (fScores.length === 0) {
+            console.log('Нет подходящих позиций для модуля, размещаем в первую свободную');
+            const anyPosition = this.findAnyFreePositionForComponent(bestComponent);
+            if (anyPosition) {
+                this.placeComponent(bestComponent, anyPosition);
+            }
+            continue;
+        }
+
+        // Пункт 6. Выбор позиции с минимальным значением оценки F
+        const bestPosition = this.selectPositionByMinF(fScores);
+        console.log(`Выбрана позиция: (${bestPosition.col},${bestPosition.row}) (F=${fScores.find(score => score.position === bestPosition)?.score})`);
+
+        // Пункт 7. Размещение выбранного модуля
+        if (this.canPlaceComponent(bestComponent, bestPosition)) {
+            this.placeComponent(bestComponent, bestPosition);
+            console.log(`Модуль ${bestComponent.name} размещен в позиции (${bestPosition.col},${bestPosition.row})`);
+        } else {
+            console.log('Не удалось разместить модуль в выбранной позиции');
+            // Резервный вариант: размещаем в первую доступную позицию
+            const fallbackPosition = this.findAnyFreePositionForComponent(bestComponent);
+            if (fallbackPosition) {
+                this.placeComponent(bestComponent, fallbackPosition);
+            }
+        }
+
+        step++;
+    }
+
+    // Пункт 8. Завершение алгоритма
+    console.log('=== АЛГОРИТМ ЗАВЕРШЕН ===');
+    this.render();
+    alert('Размещение завершено!');
+}
+
+// Вспомогательные методы для алгоритма
+
+// Получение неразмещенных компонентов
+getUnplacedComponents() {
+    return this.components.filter(comp => !this.isComponentPlaced(comp));
+}
+
+// Получение позиций, соседних с занятыми
+getNeighborPositions() {
+    const neighborPositions = new Set();
+    const occupiedPositions = this.placementGrid.filter(pos => pos.occupied);
+
+    occupiedPositions.forEach(occupiedPos => {
+        // Проверяем все 8 соседних позиций
+        const directions = [
+            { col: -1, row: -1 }, { col: 0, row: -1 }, { col: 1, row: -1 },
+            { col: -1, row: 0 },                     { col: 1, row: 0 },
+            { col: -1, row: 1 }, { col: 0, row: 1 }, { col: 1, row: 1 }
+        ];
+
+        directions.forEach(dir => {
+            const neighborCol = occupiedPos.col + dir.col;
+            const neighborRow = occupiedPos.row + dir.row;
+            const neighborPos = this.findGridPosition(neighborCol, neighborRow);
+
+            if (neighborPos && !neighborPos.occupied) {
+                neighborPositions.add(neighborPos);
+            }
+        });
+    });
+
+    // Если нет соседних позиций, возвращаем все свободные позиции
+    if (neighborPositions.size === 0) {
+        return this.placementGrid.filter(pos => !pos.occupied);
+    }
+
+    return Array.from(neighborPositions);
+}
+
+// Расчет оценки J для неразмещенных модулей (формула 3.3.1)
+calculateJScores(unplacedComponents) {
+    const connectionMatrix = this.buildConnectionMatrix();
+    const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp));
+
+    return unplacedComponents.map(component => {
+        let sumConnectionsToPlaced = 0;
+        let sumConnectionsToUnplaced = 0;
+
+        // Сумма связей с размещенными модулями
+        placedComponents.forEach(placedComp => {
+            const weight = connectionMatrix[component.id]?.[placedComp.id] || 0;
+            sumConnectionsToPlaced += weight;
+        });
+
+        // Сумма связей с неразмещенными модулями
+        unplacedComponents.forEach(unplacedComp => {
+            if (unplacedComp !== component) {
+                const weight = connectionMatrix[component.id]?.[unplacedComp.id] || 0;
+                sumConnectionsToUnplaced += weight;
+            }
+        });
+
+        // J = sum(связи с размещенными) - sum(связи с неразмещенными)
+        const jScore = sumConnectionsToPlaced - sumConnectionsToUnplaced;
+
+        return {
+            component: component,
+            score: jScore,
+            details: {
+                toPlaced: sumConnectionsToPlaced,
+                toUnplaced: sumConnectionsToUnplaced
+            }
+        };
+    });
+}
+
+// Выбор модуля с максимальной оценкой J
+selectComponentByMaxJ(jScores) {
+    let maxScore = -Infinity;
+    let bestComponent = null;
+
+    jScores.forEach(score => {
+        if (score.score > maxScore) {
+            maxScore = score.score;
+            bestComponent = score.component;
+        }
+    });
+
+    return bestComponent;
+}
+
+// Расчет оценки F для позиций (формула 3.3.2)
+calculateFScores(component, neighborPositions) {
+    const connectionMatrix = this.buildConnectionMatrix();
+    const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp));
+
+    return neighborPositions.map(position => {
+        if (!this.canPlaceComponent(component, position)) {
+            return { position: position, score: Infinity };
+        }
+
+        let fScore = 0;
+
+        // Сумма произведений веса связи на расстояние до размещенных модулей
+        placedComponents.forEach(placedComp => {
+            const weight = connectionMatrix[component.id]?.[placedComp.id] || 0;
+            if (weight > 0) {
+                const distance = this.calculateManhattanDistance(position, this.findComponentPosition(placedComp));
+                fScore += weight * distance;
+            }
+        });
+
+        return {
+            position: position,
+            score: fScore,
+            details: {
+                component: component.name,
+                position: `${position.col},${position.row}`
+            }
+        };
+    }).filter(score => score.score < Infinity); // Фильтруем неподходящие позиции
+}
+
+    // Выбор позиции с минимальной оценкой F
+    selectPositionByMinF(fScores) {
+        let minScore = Infinity;
+        let bestPosition = null;
+
+        fScores.forEach(score => {
+            if (score.score < minScore) {
+                minScore = score.score;
+                bestPosition = score.position;
+            }
+        });
+
+        return bestPosition;
+    }
+
+    // Расчет манхэттенского расстояния между позициями
+    calculateManhattanDistance(pos1, pos2) {
+        if (!pos1 || !pos2) return Infinity;
+        return Math.abs(pos1.col - pos2.col) + Math.abs(pos1.row - pos2.row);
+    }
+
+    // Размещение оставшихся компонентов (резервный метод)
+    placeRemainingComponents() {
+        const unplacedComponents = this.getUnplacedComponents();
+        console.log(`Размещаем оставшиеся ${unplacedComponents.length} компонентов`);
+
+        unplacedComponents.forEach(component => {
+            const position = this.findAnyFreePositionForComponent(component);
+            if (position) {
+                this.placeComponent(component, position);
+                console.log(`Резервное размещение: ${component.name} в (${position.col},${position.row})`);
+            }
+        });
+    }
 }
 
 // Класс для графического редактора символов
@@ -826,11 +2199,127 @@ class SymbolEditor {
         this.gridSize = 20;
         this.snapToGrid = true;
 
+        // Свойства для трансформации (добавляем их)
+        this.scale = 1.0;
+        this.offsetX = 0;
+        this.offsetY = 0;
+
         this.setupEventListeners();
         this.render();
+
+        // Добавляем обработчик для выбора шага сетки
+        const gridStepSelect = document.getElementById('compGridStep');
+        if (gridStepSelect) {
+            gridStepSelect.addEventListener('change', (e) => {
+                if (e.target.value === 'custom') {
+                    document.getElementById('customGridStep').style.display = 'block';
+                } else {
+                    document.getElementById('customGridStep').style.display = 'none';
+                }
+            });
+        }
     }
 
+    // Метод для расчета размеров компонента
+    calculateDimensions() {
+        if (this.elements.length === 0 && this.pins.length === 0) {
+            return { width: 0, height: 0 };
+        }
 
+        // Находим границы всех элементов и пинов
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+        // Обрабатываем элементы
+        this.elements.forEach(element => {
+            if (element.points) {
+                element.points.forEach(point => {
+                    minX = Math.min(minX, point.x);
+                    maxX = Math.max(maxX, point.x);
+                    minY = Math.min(minY, point.y);
+                    maxY = Math.max(maxY, point.y);
+                });
+            }
+            if (element.type === 'circle' && element.radius) {
+                const center = element.points[0];
+                minX = Math.min(minX, center.x - element.radius);
+                maxX = Math.max(maxX, center.x + element.radius);
+                minY = Math.min(minY, center.y - element.radius);
+                maxY = Math.max(maxY, center.y + element.radius);
+            }
+        });
+
+        // Обрабатываем пины
+        this.pins.forEach(pin => {
+            minX = Math.min(minX, pin.x - 5); // + отступ для пина
+            maxX = Math.max(maxX, pin.x + 5);
+            minY = Math.min(minY, pin.y - 5);
+            maxY = Math.max(maxY, pin.y + 5);
+        });
+
+        // Если нет элементов, используем границы пинов
+        if (minX === Infinity && this.pins.length > 0) {
+            this.pins.forEach(pin => {
+                minX = Math.min(minX, pin.x);
+                maxX = Math.max(maxX, pin.x);
+                minY = Math.min(minY, pin.y);
+                maxY = Math.max(maxY, pin.y);
+            });
+        }
+
+        // Добавляем отступы
+        const padding = 10;
+        const width = Math.max(0, maxX - minX) + padding * 2;
+        const height = Math.max(0, maxY - minY) + padding * 2;
+
+        return { width, height };
+    }
+
+    getComponentData() {
+        const name = document.getElementById('compName').value;
+        const reference = document.getElementById('compReference').value;
+        const gridStepSelect = document.getElementById('compGridStep');
+        let gridStep = gridStepSelect.value;
+
+        if (gridStep === 'custom') {
+            gridStep = document.getElementById('customGridStep').value;
+        }
+
+        if (!name || !reference) {
+            alert('Введите название и префикс компонента');
+            return null;
+        }
+
+        if (this.pins.length === 0) {
+            alert('Добавьте хотя бы один пин');
+            return null;
+        }
+
+        if (!gridStep || isNaN(parseFloat(gridStep))) {
+            alert('Укажите корректный шаг сетки');
+            return null;
+        }
+
+        // Рассчитываем и показываем размеры
+        const dimensions = this.calculateDimensions();
+        const gridStepNum = parseFloat(gridStep);
+
+        alert(`Компонент создан!\nРазмеры: ${dimensions.width}×${dimensions.height}px\nЗанимает позиций: ${Math.ceil(dimensions.width/50)}×${Math.ceil(dimensions.height/50)}`);
+
+        return {
+            name: name,
+            reference: reference,
+            symbol: document.getElementById('svgPath').value,
+            pins: this.pins,
+            gridStep: gridStepNum,
+            dimensions: dimensions,
+            footprint: '',
+            fields: {
+                Value: name,
+                Footprint: '',
+                Datasheet: '~'
+            }
+        };
+    }
 
     handleKeyDown(e) {
         // Ctrl + Z → Undo
@@ -1074,7 +2563,7 @@ class SymbolEditor {
     }
 
     render() {
-        // очистка
+        // Очистка canvas
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         // Сохраняем и переводим систему координат в центр
@@ -1447,34 +2936,6 @@ class SymbolEditor {
             this.renderPreview();
         }
     }
-
-    getComponentData() {
-        const name = document.getElementById('compName').value;
-        const reference = document.getElementById('compReference').value;
-
-        if (!name || !reference) {
-            alert('Введите название и префикс компонента');
-            return null;
-        }
-
-        if (this.pins.length === 0) {
-            alert('Добавьте хотя бы один пин');
-            return null;
-        }
-
-        return {
-            name: name,
-            reference: reference,
-            symbol: document.getElementById('svgPath').value,
-            pins: this.pins,
-            footprint: '',
-            fields: {
-                Value: name,
-                Footprint: '',
-                Datasheet: '~'
-            }
-        };
-    }
 }
 // ---------- конец класса SymbolEditor ----------
 
@@ -1562,6 +3023,10 @@ function addPinManually() {
     symbolEditor.addPin(x, y);
 }
 
+function runSequentialPlacement() {
+    editor.optimizePlacement();
+}
+
 async function saveSymbolComponent() {
     const componentData = symbolEditor.getComponentData();
     if (!componentData) return;
@@ -1602,6 +3067,19 @@ function toggleEditorSnap() {
         symbolEditor.snapToGrid = !symbolEditor.snapToGrid;
         symbolEditor.render();
     }
+}
+
+function createPlacementGrid() {
+    editor.createPlacementGrid();
+}
+
+
+function optimizePlacement() {
+    editor.optimizePlacement();
+}
+
+function togglePlacementGrid() {
+    editor.togglePlacementGrid();
 }
 
 // Закрытие модальных окон при клике вне их

@@ -473,6 +473,10 @@
         <button onclick="loadSchema()">📂 Загрузить схему</button>
         <button onclick="clearSchema()">🗑 Очистить</button>
         <button onclick="showSymbolEditor()">🎨 Создать компонент</button>
+        <button onclick="createPlacementGrid()">🏗 Создать сетку позиций</button>
+        <button onclick="optimizePlacement()">⚡ Оптимизировать размещение</button>
+        <button onclick="togglePlacementGrid()">🔲 Показать сетку</button>
+        <button onclick="runSequentialPlacement()">🧩 Последовательный алгоритм</button>
 
 
 
@@ -616,6 +620,17 @@
                             <label>SVG Path (автогенерация):</label>
                             <textarea id="svgPath" rows="3" readonly style="background: #2d2d2d; font-family: monospace; font-size: 10px;"></textarea>
                             <small style="color: #bdc3c7; font-size: 10px;">SVG path генерируется автоматически при рисовании</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="compGridStep">Шаг сетки компонента (мм):</label>
+                            <select id="compGridStep" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--primary-color); color: var(--text-color); width: 100%; font-size: 12px;">
+                                <option value="2.54">2.54 мм (стандартный)</option>
+                                <option value="1.27">1.27 мм (мелкий)</option>
+                                <option value="5.08">5.08 мм (крупный)</option>
+                                <option value="custom">Произвольный</option>
+                            </select>
+                            <input type="number" id="customGridStep" placeholder="Введите шаг в мм" style="width: 100%; padding: 8px; margin-top: 5px; display: none; border: 1px solid var(--border-color); border-radius: 4px; background: var(--primary-color); color: var(--text-color); font-size: 12px;">
                         </div>
 
                         <div class="form-actions">
