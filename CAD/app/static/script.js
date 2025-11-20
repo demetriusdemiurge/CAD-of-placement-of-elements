@@ -590,13 +590,9 @@ estimateComponentDimensions(component) {
         this.ctx.translate(comp.x, comp.y);
         this.ctx.rotate(comp.rotation * Math.PI / 180);
 
-        // Рендерим символ
+        // Рендерим символ (уже с учетом вращения)
         this.ctx.strokeStyle = comp === this.selectedComponent ? '#e74c3c' : '#ecf0f1';
         this.ctx.lineWidth = comp === this.selectedComponent ? 2.5 : 1.5;
-        this.ctx.setLineDash([]);
-        this.ctx.fillStyle = 'transparent';
-
-
 
         try {
             const path = new Path2D(comp.symbol);
@@ -605,9 +601,9 @@ estimateComponentDimensions(component) {
             console.error('Error rendering symbol:', e);
         }
 
-        // Рендерим пины
+        // Рендерим пины (уже с правильными позициями после вращения)
         this.ctx.fillStyle = comp === this.selectedComponent ? '#e74c3c' : '#3498db';
-        for (const pin of comp.pins) {
+        comp.pins.forEach((pin, index) => {
             this.ctx.beginPath();
             this.ctx.arc(pin.x, pin.y, 2, 0, 2 * Math.PI);
             this.ctx.fill();
@@ -619,7 +615,7 @@ estimateComponentDimensions(component) {
                 this.ctx.textAlign = 'center';
                 this.ctx.fillText(pin.name, pin.x, pin.y - 8);
             }
-        }
+        });
 
         // ПРОСТОЙ И РАБОЧИЙ СПОСОБ:
         // Находим минимальную и максимальную Y-координаты среди всех пинов
@@ -658,9 +654,20 @@ estimateComponentDimensions(component) {
         if (pinRef.component && pinRef.pinIndex !== undefined) {
             const comp = pinRef.component;
             const pin = comp.pins[pinRef.pinIndex];
+
+            // Учитываем вращение компонента
+            const orientation = comp.rotation || 0;
+            const radians = orientation * Math.PI / 180;
+            const cos = Math.cos(radians);
+            const sin = Math.sin(radians);
+
+            // Вращаем координаты пина
+            const rotatedX = pin.x * cos - pin.y * sin;
+            const rotatedY = pin.x * sin + pin.y * cos;
+
             return {
-                x: comp.x + pin.x,
-                y: comp.y + pin.y
+                x: comp.x + rotatedX,
+                y: comp.y + rotatedY
             };
         }
         return pinRef;
@@ -854,7 +861,7 @@ optimizePlacement() {
     const startTime = performance.now();
 
     // Запускаем последовательный алгоритм
-    this.sequentialConnectivityPlacement();
+    this.improvedSequentialPlacement();
 
     const endTime = performance.now();
     const executionTime = (endTime - startTime) / 1000;
@@ -1923,61 +1930,130 @@ highlightConnections() {
         }
     }
 
-    // Последовательный алгоритм размещения по связности
-sequentialConnectivityPlacement() {
+    // Вспомогательные методы для алгоритма
+
+    // Получение неразмещенных компонентов
+    getUnplacedComponents() {
+        return this.components.filter(comp => !this.isComponentPlaced(comp));
+    }
+
+    // Выбор модуля с максимальной оценкой J
+    selectComponentByMaxJ(jScores) {
+        let maxScore = -Infinity;
+        let bestComponent = null;
+
+        jScores.forEach(score => {
+            if (score.score > maxScore) {
+                maxScore = score.score;
+                bestComponent = score.component;
+            }
+        });
+
+        return bestComponent;
+    }
+
+        // Выбор позиции с минимальной оценкой F
+        selectPositionByMinF(fScores) {
+            let minScore = Infinity;
+            let bestPosition = null;
+
+            fScores.forEach(score => {
+                if (score.score < minScore) {
+                    minScore = score.score;
+                    bestPosition = score.position;
+                }
+            });
+
+            return bestPosition;
+        }
+
+        // Расчет манхэттенского расстояния между позициями
+        calculateManhattanDistance(pos1, pos2) {
+            if (!pos1 || !pos2) return Infinity;
+            return Math.abs(pos1.col - pos2.col) + Math.abs(pos1.row - pos2.row);
+        }
+
+        calculateFScoreWithIntersectionPenalty(component, position, orientation, connectionMatrix, placedComponents) {
+        let baseScore = this.calculateFScoreForOrientation(component, position, orientation, connectionMatrix, placedComponents);
+
+        // Штраф за пересечения с существующими проводами
+        const intersectionPenalty = this.calculateIntersectionPenalty(component, position, orientation);
+        baseScore += intersectionPenalty * 10; // Увеличиваем вес штрафа
+
+        return baseScore;
+    }
+
+    calculateIntersectionPenalty(component, position, orientation) {
+        let intersections = 0;
+        const compCenter = this.calculateComponentCenter(component, position, orientation);
+
+        // Проверяем пересечения с существующими проводами
+        this.wires.forEach(wire => {
+            if (this.doesWireIntersectComponent(wire, compCenter, component)) {
+                intersections++;
+            }
+        });
+
+        return intersections;
+    }
+
+    // Улучшенный последовательный алгоритм размещения по связности
+improvedSequentialPlacement() {
     if (this.placementGrid.length === 0) {
         alert('Сначала создайте сетку позиций');
         return;
     }
 
-    console.log('=== ПОСЛЕДОВАТЕЛЬНЫЙ АЛГОРИТМ РАЗМЕЩЕНИЯ ===');
+    console.log('=== УЛУЧШЕННЫЙ ПОСЛЕДОВАТЕЛЬНЫЙ АЛГОРИТМ РАЗМЕЩЕНИЯ ===');
 
     // Очищаем предыдущее размещение
     this.clearGrid();
 
-    // Пункт 1. Размещение директивных модулей (первый модуль в центр)
-    const firstComponent = this.components[0];
+    // Пункт 1. Размещение директивных модулей (выбираем компонент с максимальными связями)
+    const firstComponent = this.selectComponentWithMaxConnections();
     if (firstComponent) {
         const centerPosition = this.findCenterPosition();
         if (centerPosition && this.canPlaceComponent(firstComponent, centerPosition)) {
             this.placeComponent(firstComponent, centerPosition);
-            console.log(`Директивный модуль размещен: ${firstComponent.name} в позиции (${centerPosition.col},${centerPosition.row})`);
+            console.log(`Директивный модуль размещен: ${firstComponent.name} (макс. связи) в позиции (${centerPosition.col},${centerPosition.row})`);
         }
     }
 
     // Основной цикл алгоритма
     let step = 1;
-    const maxSteps = this.components.length * 2; // защита от бесконечного цикла
+    const maxSteps = this.components.length * 3;
 
     while (this.getUnplacedComponents().length > 0 && step <= maxSteps) {
         console.log(`\n--- Шаг ${step} ---`);
+        console.log(`Неразмещено: ${this.getUnplacedComponents().length} компонентов`);
 
         // Пункт 2. Формирование массива позиций, соседних с занятыми
-        const neighborPositions = this.getNeighborPositions();
+        const neighborPositions = this.getExtendedNeighborPositions();
         console.log(`Соседние позиции: ${neighborPositions.length}`);
 
         if (neighborPositions.length === 0) {
-            console.log('Нет соседних позиций, размещаем в первую свободную');
-            this.placeRemainingComponents();
+            console.log('Нет соседних позиций, размещаем оставшиеся компоненты');
+            this.placeRemainingComponentsWithOptimization();
             break;
         }
 
         // Пункт 3. Расчет оценки J для всех неразмещенных модулей
         const unplacedComponents = this.getUnplacedComponents();
-        const jScores = this.calculateJScores(unplacedComponents);
+        const jScores = this.calculateImprovedJScores(unplacedComponents);
 
         if (jScores.length === 0) break;
 
         // Пункт 4. Выбор модуля с максимальным значением оценки J
         const bestComponent = this.selectComponentByMaxJ(jScores);
-        console.log(`Выбран модуль: ${bestComponent.name} (J=${jScores.find(score => score.component === bestComponent)?.score})`);
+        const bestJScore = jScores.find(score => score.component === bestComponent)?.score || 0;
+        console.log(`Выбран модуль: ${bestComponent.name} (J=${bestJScore.toFixed(2)})`);
 
-        // Пункт 5. Расчет оценки F для каждой позиции, соседней с занятыми
-        const fScores = this.calculateFScores(bestComponent, neighborPositions);
+        // Пункт 5. Расчет оценки F для каждой позиции с учетом ориентации
+        const fScores = this.calculateImprovedFScores(bestComponent, neighborPositions);
 
         if (fScores.length === 0) {
-            console.log('Нет подходящих позиций для модуля, размещаем в первую свободную');
-            const anyPosition = this.findAnyFreePositionForComponent(bestComponent);
+            console.log('Нет подходящих позиций для модуля, ищем любую свободную');
+            const anyPosition = this.findAnyFreePositionForLargeComponent(bestComponent);
             if (anyPosition) {
                 this.placeComponent(bestComponent, anyPosition);
             }
@@ -1985,17 +2061,18 @@ sequentialConnectivityPlacement() {
         }
 
         // Пункт 6. Выбор позиции с минимальным значением оценки F
-        const bestPosition = this.selectPositionByMinF(fScores);
-        console.log(`Выбрана позиция: (${bestPosition.col},${bestPosition.row}) (F=${fScores.find(score => score.position === bestPosition)?.score})`);
+        const bestPlacement = this.selectPlacementByMinF(fScores);
+        console.log(`Выбрана позиция: (${bestPlacement.position.col},${bestPlacement.position.row}) (F=${bestPlacement.score.toFixed(2)})`);
 
         // Пункт 7. Размещение выбранного модуля
-        if (this.canPlaceComponent(bestComponent, bestPosition)) {
-            this.placeComponent(bestComponent, bestPosition);
-            console.log(`Модуль ${bestComponent.name} размещен в позиции (${bestPosition.col},${bestPosition.row})`);
+        if (this.placeComponentWithOrientation(bestComponent, bestPlacement.position, bestPlacement.orientation)) {
+            console.log(`Модуль ${bestComponent.name} размещен в позиции (${bestPlacement.position.col},${bestPlacement.position.row}) ориентация: ${bestPlacement.orientation}`);
+
+            // Визуализируем шаг
+            this.highlightCurrentPlacement(bestComponent, step);
         } else {
             console.log('Не удалось разместить модуль в выбранной позиции');
-            // Резервный вариант: размещаем в первую доступную позицию
-            const fallbackPosition = this.findAnyFreePositionForComponent(bestComponent);
+            const fallbackPosition = this.findAnyFreePositionForLargeComponent(bestComponent);
             if (fallbackPosition) {
                 this.placeComponent(bestComponent, fallbackPosition);
             }
@@ -2006,65 +2083,72 @@ sequentialConnectivityPlacement() {
 
     // Пункт 8. Завершение алгоритма
     console.log('=== АЛГОРИТМ ЗАВЕРШЕН ===');
-    this.render();
-    alert('Размещение завершено!');
+    this.finalizePlacement();
 }
 
-// Вспомогательные методы для алгоритма
+// 1. Выбор компонента с максимальным количеством связей
+selectComponentWithMaxConnections() {
+    const connectionMatrix = this.buildConnectionMatrix();
+    let maxConnections = -1;
+    let bestComponent = null;
 
-// Получение неразмещенных компонентов
-getUnplacedComponents() {
-    return this.components.filter(comp => !this.isComponentPlaced(comp));
-}
-
-// Получение позиций, соседних с занятыми
-getNeighborPositions() {
-    const neighborPositions = new Set();
-    const occupiedPositions = this.placementGrid.filter(pos => pos.occupied);
-
-    occupiedPositions.forEach(occupiedPos => {
-        // Проверяем все 8 соседних позиций
-        const directions = [
-            { col: -1, row: -1 }, { col: 0, row: -1 }, { col: 1, row: -1 },
-            { col: -1, row: 0 },                     { col: 1, row: 0 },
-            { col: -1, row: 1 }, { col: 0, row: 1 }, { col: 1, row: 1 }
-        ];
-
-        directions.forEach(dir => {
-            const neighborCol = occupiedPos.col + dir.col;
-            const neighborRow = occupiedPos.row + dir.row;
-            const neighborPos = this.findGridPosition(neighborCol, neighborRow);
-
-            if (neighborPos && !neighborPos.occupied) {
-                neighborPositions.add(neighborPos);
-            }
-        });
+    this.components.forEach(component => {
+        const connections = this.getTotalConnections(component.id, connectionMatrix);
+        if (connections > maxConnections) {
+            maxConnections = connections;
+            bestComponent = component;
+        }
     });
 
-    // Если нет соседних позиций, возвращаем все свободные позиции
-    if (neighborPositions.size === 0) {
-        return this.placementGrid.filter(pos => !pos.occupied);
-    }
-
-    return Array.from(neighborPositions);
+    console.log(`Выбран компонент с максимальными связями: ${bestComponent?.name} (${maxConnections} связей)`);
+    return bestComponent || this.components[0];
 }
 
-// Расчет оценки J для неразмещенных модулей (формула 3.3.1)
-calculateJScores(unplacedComponents) {
-    const connectionMatrix = this.buildConnectionMatrix();
+// 2. Поддержка больших элементов (уже есть в вашем коде, но улучшим)
+findAnyFreePositionForLargeComponent(component) {
+    const compConfig = this.componentGridPositions.get(component);
+    if (!compConfig) return null;
+
+    // Сначала ищем в центре
+    const centerPosition = this.findCenterPosition();
+    if (centerPosition && this.canPlaceComponent(component, centerPosition)) {
+        return centerPosition;
+    }
+
+    // Затем ищем по спирали от центра
+    const spiralPositions = this.generateSpiralSearchOrder();
+    for (const position of spiralPositions) {
+        if (this.canPlaceComponent(component, position)) {
+            return position;
+        }
+    }
+
+    // Ищем любую свободную позицию
+    for (const position of this.placementGrid) {
+        if (this.canPlaceComponent(component, position)) {
+            return position;
+        }
+    }
+
+    return null;
+}
+
+// 3. Улучшенный расчет оценки J с весами связей
+calculateImprovedJScores(unplacedComponents) {
+    const connectionMatrix = this.buildWeightedConnectionMatrix();
     const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp));
 
     return unplacedComponents.map(component => {
         let sumConnectionsToPlaced = 0;
         let sumConnectionsToUnplaced = 0;
 
-        // Сумма связей с размещенными модулями
+        // Сумма связей с размещенными модулями (с весами)
         placedComponents.forEach(placedComp => {
             const weight = connectionMatrix[component.id]?.[placedComp.id] || 0;
             sumConnectionsToPlaced += weight;
         });
 
-        // Сумма связей с неразмещенными модулями
+        // Сумма связей с неразмещенными модулями (с весами)
         unplacedComponents.forEach(unplacedComp => {
             if (unplacedComp !== component) {
                 const weight = connectionMatrix[component.id]?.[unplacedComp.id] || 0;
@@ -2086,87 +2170,575 @@ calculateJScores(unplacedComponents) {
     });
 }
 
-// Выбор модуля с максимальной оценкой J
-selectComponentByMaxJ(jScores) {
-    let maxScore = -Infinity;
-    let bestComponent = null;
+// 4. Матрица связей с весами
+buildWeightedConnectionMatrix() {
+    const matrix = {};
+    const compIds = this.components.map(c => c.id);
 
-    jScores.forEach(score => {
-        if (score.score > maxScore) {
-            maxScore = score.score;
-            bestComponent = score.component;
+    // Инициализация матрицы
+    compIds.forEach(id1 => {
+        matrix[id1] = {};
+        compIds.forEach(id2 => {
+            matrix[id1][id2] = 0;
+        });
+    });
+
+    // Заполнение матрицы на основе проводов с весами
+    this.wires.forEach(wire => {
+        const startComp = wire.start.component;
+        const endComp = wire.end.component;
+
+        if (startComp && endComp && startComp.id !== endComp.id) {
+            // Вес связи можно настроить (по умолчанию 1)
+            let weight = 1;
+
+            // Можно добавить логику для разных типов связей
+            // Например, силовые связи имеют больший вес
+            if (startComp.type?.includes('power') || endComp.type?.includes('power')) {
+                weight = 2;
+            }
+
+            matrix[startComp.id][endComp.id] += weight;
+            matrix[endComp.id][startComp.id] += weight;
         }
     });
 
-    return bestComponent;
+    return matrix;
 }
 
-// Расчет оценки F для позиций (формула 3.3.2)
-calculateFScores(component, neighborPositions) {
+// Улучшенный расчет оценки F с учетом реальных позиций пинов после вращения
+calculateImprovedFScores(component, neighborPositions) {
+    const connectionMatrix = this.buildWeightedConnectionMatrix();
+    const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp));
+    const fScores = [];
+
+    // Проверяем все возможные ориентации
+    const orientations = [0, 90, 180, 270];
+
+    neighborPositions.forEach(position => {
+        orientations.forEach(orientation => {
+            if (this.canPlaceComponentWithOrientation(component, position, orientation)) {
+                const score = this.calculateFScoreWithRealPinDistances(
+                    component, position, orientation, connectionMatrix, placedComponents
+                );
+
+                if (score < Infinity) {
+                    fScores.push({
+                        position: position,
+                        orientation: orientation,
+                        score: score,
+                        component: component.name,
+                        positionLabel: `${position.col},${position.row}`
+                    });
+                }
+            }
+        });
+    });
+
+    return fScores;
+}
+
+// Расчет оценки F на основе реальных расстояний между пинами
+calculateFScoreWithRealPinDistances(component, position, orientation, connectionMatrix, placedComponents) {
+    let totalWireLength = 0;
+    let connectionCount = 0;
+
+    // Временное размещение для расчета позиций пинов
+    const tempPinPositions = this.calculatePinPositionsAfterPlacement(component, position, orientation);
+
+    placedComponents.forEach(placedComp => {
+        const weight = connectionMatrix[component.id]?.[placedComp.id] || 0;
+        if (weight > 0) {
+            // Находим соответствующие пины для этой связи
+            const pinPairs = this.findConnectedPinPairs(component, placedComp);
+
+            pinPairs.forEach(pinPair => {
+                const pin1Pos = tempPinPositions[pinPair.pin1Index];
+                const pin2Pos = this.getActualPinPosition(placedComp, pinPair.pin2Index);
+
+                if (pin1Pos && pin2Pos) {
+                    const distance = this.calculateManhattanDistance(pin1Pos, pin2Pos);
+                    totalWireLength += weight * distance;
+                    connectionCount++;
+                }
+            });
+        }
+    });
+
+    // Если нет связей, добавляем штраф
+    if (connectionCount === 0) {
+        return 1000;
+    }
+
+    // Нормализуем по количеству связей
+    return totalWireLength / connectionCount;
+}
+
+// Расчет позиций пинов после размещения и вращения
+calculatePinPositionsAfterPlacement(component, position, orientation) {
+    const pinPositions = [];
+    const centerX = position.x + (this.componentGridPositions.get(component)?.width * this.baseGridSize || 0) / 2;
+    const centerY = position.y + (this.componentGridPositions.get(component)?.height * this.baseGridSize || 0) / 2;
+
+    const radians = orientation * Math.PI / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+
+    component.pins.forEach(pin => {
+        // Вращаем координаты пина
+        const rotatedX = pin.x * cos - pin.y * sin;
+        const rotatedY = pin.x * sin + pin.y * cos;
+
+        // Переводим в абсолютные координаты
+        const absoluteX = centerX + rotatedX;
+        const absoluteY = centerY + rotatedY;
+
+        pinPositions.push({
+            x: absoluteX,
+            y: absoluteY,
+            col: Math.round(position.col + rotatedX / this.baseGridSize),
+            row: Math.round(position.row + rotatedY / this.baseGridSize)
+        });
+    });
+
+    return pinPositions;
+}
+
+// Получение актуальной позиции пина размещенного компонента
+getActualPinPosition(component, pinIndex) {
+    if (!component.pins || !component.pins[pinIndex]) return null;
+
+    const pin = component.pins[pinIndex];
+    const centerX = component.x;
+    const centerY = component.y;
+    const orientation = component.rotation || 0;
+
+    const radians = orientation * Math.PI / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+
+    // Вращаем координаты пина
+    const rotatedX = pin.x * cos - pin.y * sin;
+    const rotatedY = pin.x * sin + pin.y * cos;
+
+    return {
+        x: centerX + rotatedX,
+        y: centerY + rotatedY,
+        col: Math.round((centerX + rotatedX) / this.baseGridSize),
+        row: Math.round((centerY + rotatedY) / this.baseGridSize)
+    };
+}
+
+// Поиск пар связанных пинов между компонентами
+findConnectedPinPairs(comp1, comp2) {
+    const pairs = [];
+
+    // Ищем провода, связывающие эти два компонента
+    this.wires.forEach(wire => {
+        const startComp = wire.start.component;
+        const endComp = wire.end.component;
+
+        if ((startComp === comp1 && endComp === comp2) ||
+            (startComp === comp2 && endComp === comp1)) {
+
+            pairs.push({
+                pin1Index: wire.start.pinIndex,
+                pin2Index: wire.end.pinIndex,
+                wire: wire
+            });
+        }
+    });
+
+    return pairs;
+}
+
+// Расчет оценки F для конкретной ориентации
+calculateFScoreForOrientation(component, position, orientation, connectionMatrix, placedComponents) {
+    let fScore = 0;
+    let validConnections = 0;
+
+    // Временное размещение для расчета расстояний
+    const tempPosition = this.calculateComponentCenter(component, position, orientation);
+
+    placedComponents.forEach(placedComp => {
+        const weight = connectionMatrix[component.id]?.[placedComp.id] || 0;
+        if (weight > 0) {
+            const placedPos = this.findComponentPosition(placedComp);
+            if (placedPos) {
+                const placedCenter = this.calculateComponentCenter(placedComp, placedPos, placedComp.rotation || 0);
+                const distance = this.calculateManhattanDistance(tempPosition, placedCenter);
+                fScore += weight * distance;
+                validConnections++;
+            }
+        }
+    });
+
+    // Если нет связей с размещенными компонентами, штрафуем
+    if (validConnections === 0) {
+        fScore += 1000; // Большой штраф за отсутствие связей
+    }
+
+    // Бонус за компактность
+    const compactnessBonus = this.calculateCompactnessBonus(position, orientation);
+    fScore -= compactnessBonus;
+
+    return fScore;
+}
+
+// Расчет центра компонента с учетом ориентации
+calculateComponentCenter(component, position, orientation) {
+    const compConfig = this.componentGridPositions.get(component);
+    if (!compConfig) return position;
+
+    let width = compConfig.width;
+    let height = compConfig.height;
+
+    // Учитываем ориентацию
+    if (orientation === 90 || orientation === 270) {
+        [width, height] = [height, width]; // Меняем местами ширину и высоту
+    }
+
+    return {
+        col: position.col + width / 2,
+        row: position.row + height / 2,
+        x: position.x + (width * this.baseGridSize) / 2,
+        y: position.y + (height * this.baseGridSize) / 2
+    };
+}
+
+// Выбор размещения с минимальной оценкой F
+selectPlacementByMinF(fScores) {
+    let minScore = Infinity;
+    let bestPlacement = null;
+
+    fScores.forEach(placement => {
+        if (placement.score < minScore) {
+            minScore = placement.score;
+            bestPlacement = placement;
+        }
+    });
+
+    return bestPlacement || fScores[0];
+}
+
+// Расширенный поиск соседних позиций для больших компонентов
+getExtendedNeighborPositions() {
+    const neighborPositions = new Set();
+    const occupiedPositions = this.placementGrid.filter(pos => pos.occupied);
+
+    occupiedPositions.forEach(occupiedPos => {
+        // Расширяем область поиска для больших компонентов
+        const searchRadius = 3;
+
+        for (let row = -searchRadius; row <= searchRadius; row++) {
+            for (let col = -searchRadius; col <= searchRadius; col++) {
+                if (row === 0 && col === 0) continue;
+
+                const neighborCol = occupiedPos.col + col;
+                const neighborRow = occupiedPos.row + row;
+                const neighborPos = this.findGridPosition(neighborCol, neighborRow);
+
+                if (neighborPos && !neighborPos.occupied) {
+                    neighborPositions.add(neighborPos);
+                }
+            }
+        }
+    });
+
+    // Если нет соседних позиций, возвращаем все свободные
+    if (neighborPositions.size === 0) {
+        return this.placementGrid.filter(pos => !pos.occupied);
+    }
+
+    return Array.from(neighborPositions);
+}
+
+// Оптимизированное размещение оставшихся компонентов
+placeRemainingComponentsWithOptimization() {
+    const unplacedComponents = this.getUnplacedComponents();
+    console.log(`Оптимизированное размещение оставшихся ${unplacedComponents.length} компонентов`);
+
+    // Сортируем по количеству связей (от большего к меньшему)
+    const connectionMatrix = this.buildWeightedConnectionMatrix();
+    const sortedComponents = unplacedComponents.sort((a, b) => {
+        const connectionsA = this.getTotalConnections(a.id, connectionMatrix);
+        const connectionsB = this.getTotalConnections(b.id, connectionMatrix);
+        return connectionsB - connectionsA;
+    });
+
+    sortedComponents.forEach(component => {
+        const bestPosition = this.findBestPositionForRemaining(component, connectionMatrix);
+        if (bestPosition) {
+            this.placeComponent(component, bestPosition);
+            console.log(`Размещен: ${component.name} в (${bestPosition.col},${bestPosition.row})`);
+        }
+    });
+}
+
+// Поиск лучшей позиции для оставшихся компонентов
+findBestPositionForRemaining(component, connectionMatrix) {
+    let bestScore = -Infinity;
+    let bestPosition = null;
+
+    for (const position of this.placementGrid) {
+        if (this.canPlaceComponent(component, position)) {
+            const score = this.calculatePlacementScoreForRemaining(component, position, connectionMatrix);
+            if (score > bestScore) {
+                bestScore = score;
+                bestPosition = position;
+            }
+        }
+    }
+
+    return bestPosition;
+}
+
+// Финальная оптимизация размещения
+finalizePlacement() {
+    console.log('Финальная оптимизация размещения...');
+
+    // Можно добавить итеративное улучшение
+    this.render();
+    this.showPlacementResults();
+
+    alert('Размещение завершено! Проверьте результат и при необходимости выполните ручную корректировку.');
+}
+
+// Подсветка текущего размещения для визуализации
+highlightCurrentPlacement(component, step) {
+    // Временная подсветка размещенного компонента
+    const position = this.findComponentPosition(component);
+    if (position) {
+        console.log(`Шаг ${step}: Размещен ${component.name} в (${position.col},${position.row})`);
+    }
+
+    this.render();
+}
+
+// === ДОБАВЬТЕ ЭТИ МЕТОДЫ ПОСЛЕ СУЩЕСТВУЮЩИХ МЕТОДОВ ===
+
+// 1. Выбор компонента с максимальным количеством связей
+selectComponentWithMaxConnections() {
     const connectionMatrix = this.buildConnectionMatrix();
+    let maxConnections = -1;
+    let bestComponent = null;
+
+    this.components.forEach(component => {
+        const connections = this.getTotalConnections(component.id, connectionMatrix);
+        if (connections > maxConnections) {
+            maxConnections = connections;
+            bestComponent = component;c
+        }
+    });
+
+    console.log(`Выбран компонент с максимальными связями: ${bestComponent?.name} (${maxConnections} связей)`);
+    return bestComponent || this.components[0];
+}
+
+// 2. Матрица связей с весами
+buildWeightedConnectionMatrix() {
+    const matrix = {};
+    const compIds = this.components.map(c => c.id);
+
+    // Инициализация матрицы
+    compIds.forEach(id1 => {
+        matrix[id1] = {};
+        compIds.forEach(id2 => {
+            matrix[id1][id2] = 0;
+        });
+    });
+
+    // Заполнение матрицы на основе проводов с весами
+    this.wires.forEach(wire => {
+        const startComp = wire.start.component;
+        const endComp = wire.end.component;
+
+        if (startComp && endComp && startComp.id !== endComp.id) {
+            // Вес связи можно настроить (по умолчанию 1)
+            let weight = 1;
+
+            // Можно добавить логику для разных типов связей
+            // Например, силовые связи имеют больший вес
+            if (startComp.type?.includes('power') || endComp.type?.includes('power')) {
+                weight = 2;
+            }
+
+            matrix[startComp.id][endComp.id] += weight;
+            matrix[endComp.id][startComp.id] += weight;
+        }
+    });
+
+    return matrix;
+}
+
+// 3. Расчет центра компонента с учетом ориентации
+calculateComponentCenter(component, position, orientation) {
+    const compConfig = this.componentGridPositions.get(component);
+    if (!compConfig) return position;
+
+    let width = compConfig.width;
+    let height = compConfig.height;
+
+    // Учитываем ориентацию
+    if (orientation === 90 || orientation === 270) {
+        [width, height] = [height, width]; // Меняем местами ширину и высоту
+    }
+
+    return {
+        col: position.col + width / 2,
+        row: position.row + height / 2,
+        x: position.x + (width * this.baseGridSize) / 2,
+        y: position.y + (height * this.baseGridSize) / 2
+    };
+}
+
+// Размещение компонента с ориентацией и обновлением позиций пинов
+placeComponentWithOrientation(component, startPosition, orientation) {
+    const compConfig = this.componentGridPositions.get(component);
+    if (!compConfig || !startPosition) return false;
+
+    let width = compConfig.width;
+    let height = compConfig.height;
+
+    // Сохраняем старую ориентацию для расчета дельты вращения
+    const oldOrientation = component.rotation || 0;
+    const rotationDelta = orientation - oldOrientation;
+
+    // Учитываем ориентацию
+    if (orientation === 90 || orientation === 270) {
+        [width, height] = [height, width];
+    }
+
+    // Занимаем позиции
+    for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+            const targetCol = startPosition.col + col;
+            const targetRow = startPosition.row + row;
+
+            const gridPos = this.findGridPosition(targetCol, targetRow);
+            if (gridPos) {
+                gridPos.occupied = true;
+                gridPos.component = component;
+            }
+        }
+    }
+
+    // Устанавливаем координаты и ориентацию
+    component.x = startPosition.x + (width * this.baseGridSize) / 2;
+    component.y = startPosition.y + (height * this.baseGridSize) / 2;
+    component.rotation = orientation;
+
+    // ОБНОВЛЯЕМ ПОЗИЦИИ ПИНОВ ПРИ ВРАЩЕНИИ
+    this.updatePinPositionsForRotation(component, rotationDelta);
+
+    // Сохраняем информацию о размещении
+    component.gridPosition = {
+        startCol: startPosition.col,
+        startRow: startPosition.row,
+        width: width,
+        height: height,
+        orientation: orientation
+    };
+
+    return true;
+}
+
+// Обновление позиций пинов при вращении
+updatePinPositionsForRotation(component, rotationDelta) {
+    if (!component.pins || rotationDelta === 0) return;
+
+    const radians = rotationDelta * Math.PI / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+
+    component.pins.forEach(pin => {
+        // Вращаем координаты пина относительно центра компонента
+        const oldX = pin.x;
+        const oldY = pin.y;
+
+        pin.x = oldX * cos - oldY * sin;
+        pin.y = oldX * sin + oldY * cos;
+
+        // Округляем до целых для сетки
+        pin.x = Math.round(pin.x);
+        pin.y = Math.round(pin.y);
+    });
+
+    console.log(`Обновлены позиции пинов для ${component.name} после вращения на ${rotationDelta}°`);
+}
+
+// 6. Выбор размещения с минимальной оценкой F
+selectPlacementByMinF(fScores) {
+    let minScore = Infinity;
+    let bestPlacement = null;
+
+    fScores.forEach(placement => {
+        if (placement.score < minScore) {
+            minScore = placement.score;
+            bestPlacement = placement;
+        }
+    });
+
+    return bestPlacement || fScores[0];
+}
+
+// 7. Бонус за компактность
+calculateCompactnessBonus(position, orientation) {
+    // Бонус за размещение ближе к центру
+    const centerCol = Math.floor(this.getGridColumns() / 2);
+    const centerRow = Math.floor(this.getGridRows() / 2);
+    const distanceToCenter = Math.abs(position.col - centerCol) + Math.abs(position.row - centerRow);
+
+    return Math.max(0, 50 - distanceToCenter) * 0.1;
+}
+
+// 8. Поиск лучшей позиции для оставшихся компонентов
+findBestPositionForRemaining(component, connectionMatrix) {
+    let bestScore = -Infinity;
+    let bestPosition = null;
+
+    for (const position of this.placementGrid) {
+        if (this.canPlaceComponent(component, position)) {
+            const score = this.calculatePlacementScoreForRemaining(component, position, connectionMatrix);
+            if (score > bestScore) {
+                bestScore = score;
+                bestPosition = position;
+            }
+        }
+    }
+
+    return bestPosition;
+}
+
+// 9. Расчет оценки для оставшихся компонентов
+calculatePlacementScoreForRemaining(component, position, connectionMatrix) {
+    let score = 0;
     const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp));
 
-    return neighborPositions.map(position => {
-        if (!this.canPlaceComponent(component, position)) {
-            return { position: position, score: Infinity };
+    placedComponents.forEach(placedComp => {
+        const weight = connectionMatrix[component.id]?.[placedComp.id] || 0;
+        if (weight > 0) {
+            const distance = this.calculateGridDistance(component, position, placedComp);
+            score += weight / (distance + 1);
         }
+    });
 
-        let fScore = 0;
-
-        // Сумма произведений веса связи на расстояние до размещенных модулей
-        placedComponents.forEach(placedComp => {
-            const weight = connectionMatrix[component.id]?.[placedComp.id] || 0;
-            if (weight > 0) {
-                const distance = this.calculateManhattanDistance(position, this.findComponentPosition(placedComp));
-                fScore += weight * distance;
-            }
-        });
-
-        return {
-            position: position,
-            score: fScore,
-            details: {
-                component: component.name,
-                position: `${position.col},${position.row}`
-            }
-        };
-    }).filter(score => score.score < Infinity); // Фильтруем неподходящие позиции
+    return score;
 }
 
-    // Выбор позиции с минимальной оценкой F
-    selectPositionByMinF(fScores) {
-        let minScore = Infinity;
-        let bestPosition = null;
+// 10. Финальная оптимизация размещения
+finalizePlacement() {
+    console.log('Финальная оптимизация размещения...');
+    this.render();
+    this.showPlacementResults();
+    alert('Размещение завершено! Проверьте результат и при необходимости выполните ручную корректировку.');
+}
 
-        fScores.forEach(score => {
-            if (score.score < minScore) {
-                minScore = score.score;
-                bestPosition = score.position;
-            }
-        });
-
-        return bestPosition;
-    }
-
-    // Расчет манхэттенского расстояния между позициями
-    calculateManhattanDistance(pos1, pos2) {
-        if (!pos1 || !pos2) return Infinity;
-        return Math.abs(pos1.col - pos2.col) + Math.abs(pos1.row - pos2.row);
-    }
-
-    // Размещение оставшихся компонентов (резервный метод)
-    placeRemainingComponents() {
-        const unplacedComponents = this.getUnplacedComponents();
-        console.log(`Размещаем оставшиеся ${unplacedComponents.length} компонентов`);
-
-        unplacedComponents.forEach(component => {
-            const position = this.findAnyFreePositionForComponent(component);
-            if (position) {
-                this.placeComponent(component, position);
-                console.log(`Резервное размещение: ${component.name} в (${position.col},${position.row})`);
-            }
-        });
-    }
+// 11. Подсветка текущего размещения
+highlightCurrentPlacement(component, step) {
+    console.log(`Шаг ${step}: Размещен ${component.name}`);
+    this.render();
+}
 }
 
 // Класс для графического редактора символов
