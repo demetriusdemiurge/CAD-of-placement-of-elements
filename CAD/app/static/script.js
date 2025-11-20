@@ -1073,6 +1073,31 @@ class KiCadWebEditor {
         this.showDetailedPlacementResults();
     }
 
+    // О determining, с какой стороны компонента находится пин (Top, Bottom, Left, Right)
+    getPinDirectionVector(component, pinIndex) {
+        const pin = component.pins[pinIndex];
+        // Размеры "коробки" пинов (bounding box самих пинов, не корпуса)
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+        component.pins.forEach(p => {
+            minX = Math.min(minX, p.x);
+            maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y);
+            maxY = Math.max(maxY, p.y);
+        });
+
+        // Определяем допуски (что считать "краем")
+        const tolerance = 10;
+
+        // Вектор нормали: x=-1 (влево), x=1 (вправо), y=-1 (вверх), y=1 (вниз)
+        if (Math.abs(pin.x - minX) < tolerance) return { x: -1, y: 0 }; // Пин слева
+        if (Math.abs(pin.x - maxX) < tolerance) return { x: 1, y: 0 };  // Пин справа
+        if (Math.abs(pin.y - minY) < tolerance) return { x: 0, y: -1 }; // Пин сверху
+        if (Math.abs(pin.y - maxY) < tolerance) return { x: 0, y: 1 };  // Пин снизу
+
+        return { x: 0, y: 0 }; // Пин где-то внутри или сложная форма
+    }
+
     // Новый метод для детального логирования размещения
     logPlacementDetails(component, placement) {
         console.log(`\n🔍 ДЕТАЛИ РАЗМЕЩЕНИЯ ${component.name}:`);
@@ -1320,7 +1345,7 @@ class KiCadWebEditor {
     }
 
     calculateFScoreWithRealPinDistances(component, position, orientation, connectionMatrix, placedComponents) {
-        let totalWireLength = 0;
+        let score = 0;
         let connectionCount = 0;
 
         const tempPinPositions = this.calculatePinPositionsAfterPlacement(component, position, orientation);
@@ -1331,23 +1356,79 @@ class KiCadWebEditor {
                 const pinPairs = this.findConnectedPinPairs(component, placedComp);
 
                 pinPairs.forEach(pinPair => {
-                    const pin1Pos = tempPinPositions[pinPair.pin1Index];
-                    const pin2Pos = this.getActualPinPosition(placedComp, pinPair.pin2Index);
+                    // 1. Базовая длина провода (Манхэттен)
+                    const pin1Pos = tempPinPositions[pinPair.pin1Index]; // Наш новый компонент
+                    const pin2Pos = this.getActualPinPosition(placedComp, pinPair.pin2Index); // Куда подключаемся
 
                     if (pin1Pos && pin2Pos) {
-                        const distance = this.calculateManhattanDistance(pin1Pos, pin2Pos);
-                        totalWireLength += weight * distance;
+                        let distance = this.calculateManhattanDistance(pin1Pos, pin2Pos);
+
+                        // --- НОВАЯ ЛОГИКА: Учет направления пина ---
+
+                        // Получаем вектор, куда "смотрит" пин размещенного компонента
+                        // Учитываем вращение размещенного компонента!
+                        const pinNormal = this.getRotatedPinDirection(placedComp, pinPair.pin2Index);
+
+                        // Вектор от пина к новому компоненту
+                        const dx = pin1Pos.x - pin2Pos.x;
+                        const dy = pin1Pos.y - pin2Pos.y;
+
+                        // Скалярное произведение: > 0 значит "перед пином", < 0 "за пином"
+                        const dotProduct = (dx * pinNormal.x) + (dy * pinNormal.y);
+
+                        if (dotProduct > 0) {
+                            // ИДЕАЛЬНО: компонент находится там, куда смотрит пин
+                            distance *= 0.5; // Бонус: уменьшаем "стоимость" расстояния в 2 раза
+                        } else if (dotProduct < 0) {
+                            // ПЛОХО: компонент "за спиной" у пина
+                            distance *= 2.0; // Штраф
+                        } else {
+                            // СБОКУ
+                            distance *= 1.2;
+                        }
+
+                        // --- НОВАЯ ЛОГИКА: Выравнивание (Alignment) ---
+                        // Если это резистор (2 пина), он должен быть параллелен вектору связи
+
+                        if (component.pins.length === 2) {
+                            // Вектор связи
+                            const linkDx = Math.abs(pin1Pos.x - pin2Pos.x);
+                            const linkDy = Math.abs(pin1Pos.y - pin2Pos.y);
+
+                            const isHorizontalLink = linkDx > linkDy;
+                            const isVerticalLink = linkDy > linkDx;
+
+                            const isHorizontalComp = (orientation === 0 || orientation === 180);
+                            const isVerticalComp = (orientation === 90 || orientation === 270);
+
+                            // Если связь горизонтальная, а компонент вертикальный -> штраф
+                            if (isHorizontalLink && !isHorizontalComp) distance += 200; // Штраф в пикселях/единицах
+                            // Если связь вертикальная, а компонент горизонтальный -> штраф
+                            if (isVerticalLink && !isVerticalComp) distance += 200;
+                        }
+
+                        score += weight * distance;
                         connectionCount++;
                     }
                 });
             }
         });
 
-        if (connectionCount === 0) {
-            return 1000;
-        }
+        if (connectionCount === 0) return 1000;
+        return score / connectionCount;
+    }
 
-        return totalWireLength / connectionCount;
+    // Вспомогательный метод для учета вращения вектора нормали
+    getRotatedPinDirection(component, pinIndex) {
+        const localDir = this.getPinDirectionVector(component, pinIndex);
+        const rotation = component.rotation || 0;
+
+        // Простое вращение вектора на 0, 90, 180, 270
+        if (rotation === 0) return localDir;
+        if (rotation === 90) return { x: -localDir.y, y: localDir.x };
+        if (rotation === 180) return { x: -localDir.x, y: -localDir.y };
+        if (rotation === 270) return { x: localDir.y, y: -localDir.x };
+        return localDir;
     }
 
     calculatePinPositionsAfterPlacement(component, position, orientation) {
