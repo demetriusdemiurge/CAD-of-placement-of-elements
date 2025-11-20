@@ -1,3 +1,14 @@
+function formatMatrix(matrix) {
+    console.log('Матрица связей:');
+    Object.keys(matrix).forEach(comp1 => {
+        const row = [];
+        Object.keys(matrix[comp1]).forEach(comp2 => {
+            row.push(matrix[comp1][comp2]);
+        });
+        console.log(`  ${comp1}: [${row.join(', ')}]`);
+    });
+}
+
 class KiCadWebEditor {
     constructor() {
         this.canvas = document.getElementById('schemaCanvas');
@@ -941,15 +952,30 @@ class KiCadWebEditor {
             return;
         }
 
-        console.log('=== УЛУЧШЕННЫЙ ПОСЛЕДОВАТЕЛЬНЫЙ АЛГОРИТМ РАЗМЕЩЕНИЯ ===');
+        console.log('=== ЗАПУСК УЛУЧШЕННОГО ПОСЛЕДОВАТЕЛЬНОГО АЛГОРИТМА РАЗМЕЩЕНИЯ ===');
+        console.log(`Всего компонентов: ${this.components.length}`);
+        console.log(`Размер сетки: ${this.getGridColumns()}×${this.getGridRows()} позиций`);
+
+        const startTime = performance.now();
         this.clearGrid();
 
+        // Шаг 1: Размещение первого компонента
         const firstComponent = this.selectComponentWithMaxConnections();
-        if (firstComponent) {
-            const centerPosition = this.findCenterPosition();
-            if (centerPosition && this.canPlaceComponent(firstComponent, centerPosition)) {
-                this.placeComponent(firstComponent, centerPosition);
-                console.log(`Директивный модуль размещен: ${firstComponent.name} в позиции (${centerPosition.col},${centerPosition.row})`);
+        const centerPosition = this.findCenterPosition();
+
+        console.log('\n🎯 ШАГ 1: РАЗМЕЩЕНИЕ ПЕРВОГО КОМПОНЕНТА');
+        console.log(`Выбран компонент: ${firstComponent.name} (${firstComponent.reference})`);
+        console.log(`Центральная позиция: (${centerPosition.col},${centerPosition.row})`);
+
+        if (firstComponent && centerPosition && this.canPlaceComponent(firstComponent, centerPosition)) {
+            this.placeComponent(firstComponent, centerPosition);
+            console.log(`✅ Размещен: ${firstComponent.name} в позиции (${centerPosition.col},${centerPosition.row})`);
+        } else {
+            console.log('❌ Не удалось разместить первый компонент в центре');
+            const fallbackPosition = this.findAnyFreePosition(firstComponent);
+            if (fallbackPosition) {
+                this.placeComponent(firstComponent, fallbackPosition);
+                console.log(`✅ Размещен в резервной позиции: (${fallbackPosition.col},${fallbackPosition.row})`);
             }
         }
 
@@ -957,56 +983,260 @@ class KiCadWebEditor {
         const maxSteps = this.components.length * 3;
 
         while (this.getUnplacedComponents().length > 0 && step <= maxSteps) {
-            console.log(`\n--- Шаг ${step} ---`);
+            console.log(`\n--- 🔄 ШАГ ${step} ---`);
+            console.log(`Осталось разместить: ${this.getUnplacedComponents().length} компонентов`);
 
+            // Шаг 2: Получение соседних позиций
             const neighborPositions = this.getExtendedNeighborPositions();
-            console.log(`Соседние позиции: ${neighborPositions.length}`);
+            console.log(`📍 Доступно соседних позиций: ${neighborPositions.length}`);
+            if (neighborPositions.length > 0) {
+                console.log('Соседние позиции:', neighborPositions.map(p => `(${p.col},${p.row})`).join(', '));
+            }
 
             if (neighborPositions.length === 0) {
-                console.log('Нет соседних позиций, размещаем оставшиеся компоненты');
+                console.log('⚠️ Нет соседних позиций, размещаем оставшиеся компоненты в свободные позиции');
                 this.placeRemainingComponentsWithOptimization();
                 break;
             }
 
+            // Шаг 3: Расчет J-оценок
             const unplacedComponents = this.getUnplacedComponents();
+            console.log(`Неразмещенные компоненты: ${unplacedComponents.map(c => c.name).join(', ')}`);
+
             const jScores = this.calculateImprovedJScores(unplacedComponents);
+            console.log('\n📊 РАСЧЕТ J-ОЦЕНОК (связность):');
+            jScores.forEach(score => {
+                console.log(`  ${score.component.name}: J = ${score.score.toFixed(2)} (к размещенным: ${score.details.toPlaced}, к неразмещенным: ${score.details.toUnplaced})`);
+            });
 
-            if (jScores.length === 0) break;
+            if (jScores.length === 0) {
+                console.log('❌ Нет компонентов для расчета J-оценок');
+                break;
+            }
 
+            // Шаг 4: Выбор компонента с максимальной J-оценкой
             const bestComponent = this.selectComponentByMaxJ(jScores);
             const bestJScore = jScores.find(score => score.component === bestComponent)?.score || 0;
-            console.log(`Выбран модуль: ${bestComponent.name} (J=${bestJScore.toFixed(2)})`);
+            console.log(`🎯 ВЫБРАН КОМПОНЕНТ: ${bestComponent.name} с J = ${bestJScore.toFixed(2)}`);
 
+            // Шаг 5: Расчет F-оценок для всех позиций и ориентаций
+            console.log('\n📊 РАСЧЕТ F-ОЦЕНОК (длина связей):');
             const fScores = this.calculateImprovedFScores(bestComponent, neighborPositions);
 
             if (fScores.length === 0) {
-                console.log('Нет подходящих позиций для модуля, ищем любую свободную');
+                console.log('❌ Нет подходящих позиций для компонента, ищем любую свободную');
                 const anyPosition = this.findAnyFreePositionForLargeComponent(bestComponent);
                 if (anyPosition) {
                     this.placeComponent(bestComponent, anyPosition);
+                    console.log(`✅ Размещен в свободной позиции: (${anyPosition.col},${anyPosition.row})`);
+                } else {
+                    console.log('❌ Не найдено ни одной свободной позиции');
                 }
                 continue;
             }
 
-            const bestPlacement = this.selectPlacementByMinF(fScores);
-            console.log(`Выбрана позиция: (${bestPlacement.position.col},${bestPlacement.position.row}) (F=${bestPlacement.score.toFixed(2)})`);
+            // Выводим топ-5 лучших позиций
+            const sortedFScores = fScores.sort((a, b) => a.score - b.score);
+            console.log('🏆 ТОП-5 ЛУЧШИХ ПОЗИЦИЙ:');
+            sortedFScores.slice(0, 5).forEach((placement, index) => {
+                console.log(`  ${index + 1}. Позиция (${placement.position.col},${placement.position.row}) ориентация ${placement.orientation}°: F = ${placement.score.toFixed(2)}`);
+            });
 
+            // Шаг 6: Выбор позиции с минимальной F-оценкой
+            const bestPlacement = this.selectPlacementByMinF(fScores);
+            console.log(`🎯 ВЫБРАНА ПОЗИЦИЯ: (${bestPlacement.position.col},${bestPlacement.position.row}) ориентация ${bestPlacement.orientation}° с F = ${bestPlacement.score.toFixed(2)}`);
+
+            // Детализация расчета для выбранной позиции
+            this.logPlacementDetails(bestComponent, bestPlacement);
+
+            // Шаг 7: Размещение компонента
             if (this.placeComponentWithOrientation(bestComponent, bestPlacement.position, bestPlacement.orientation)) {
-                console.log(`Модуль ${bestComponent.name} размещен в позиции (${bestPlacement.position.col},${bestPlacement.position.row}) ориентация: ${bestPlacement.orientation}`);
+                console.log(`✅ УСПЕШНО РАЗМЕЩЕН: ${bestComponent.name} в позиции (${bestPlacement.position.col},${bestPlacement.position.row}) ориентация ${bestPlacement.orientation}°`);
                 this.highlightCurrentPlacement(bestComponent, step);
             } else {
-                console.log('Не удалось разместить модуль в выбранной позиции');
+                console.log('❌ НЕ УДАЛОСЬ РАЗМЕСТИТЬ компонент в выбранной позиции');
                 const fallbackPosition = this.findAnyFreePositionForLargeComponent(bestComponent);
                 if (fallbackPosition) {
                     this.placeComponent(bestComponent, fallbackPosition);
+                    console.log(`✅ Размещен в резервной позиции: (${fallbackPosition.col},${fallbackPosition.row})`);
                 }
             }
 
             step++;
         }
 
-        console.log('=== АЛГОРИТМ ЗАВЕРШЕН ===');
+        const endTime = performance.now();
+        const executionTime = (endTime - startTime) / 1000;
+        console.log(`\n=== ✅ АЛГОРИТМ ЗАВЕРШЕН ЗА ${executionTime.toFixed(2)} СЕКУНД ===`);
+
         this.finalizePlacement();
+        this.showDetailedPlacementResults();
+    }
+
+    // Новый метод для детального логирования размещения
+    logPlacementDetails(component, placement) {
+        console.log(`\n🔍 ДЕТАЛИ РАЗМЕЩЕНИЯ ${component.name}:`);
+
+        const connectionMatrix = this.buildWeightedConnectionMatrix();
+        const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp) && comp !== component);
+
+        const pinPositions = this.calculatePinPositionsAfterPlacement(component, placement.position, placement.orientation);
+        console.log(`  Позиции пинов после размещения:`);
+        component.pins.forEach((pin, index) => {
+            const pos = pinPositions[index];
+            console.log(`    Пин ${pin.number} (${pin.name}): (${pos.col},${pos.row})`);
+        });
+
+        let totalWireLength = 0;
+        let connectionDetails = [];
+
+        placedComponents.forEach(placedComp => {
+            const weight = connectionMatrix[component.id]?.[placedComp.id] || 0;
+            if (weight > 0) {
+                const pinPairs = this.findConnectedPinPairs(component, placedComp);
+
+                pinPairs.forEach(pinPair => {
+                    const pin1Pos = pinPositions[pinPair.pin1Index];
+                    const pin2Pos = this.getActualPinPosition(placedComp, pinPair.pin2Index);
+
+                    if (pin1Pos && pin2Pos) {
+                        const distance = this.calculateManhattanDistance(pin1Pos, pin2Pos);
+                        const weightedDistance = weight * distance;
+                        totalWireLength += weightedDistance;
+
+                        connectionDetails.push({
+                            target: placedComp.name,
+                            pin1: component.pins[pinPair.pin1Index].name,
+                            pin2: placedComp.pins[pinPair.pin2Index].name,
+                            weight: weight,
+                            distance: distance,
+                            weightedDistance: weightedDistance
+                        });
+                    }
+                });
+            }
+        });
+
+        console.log(`  Соединения с размещенными компонентами:`);
+        connectionDetails.forEach(detail => {
+            console.log(`    → ${detail.target}: пин ${detail.pin1}-${detail.pin2}, вес=${detail.weight}, расстояние=${detail.distance}, взвешенное=${detail.weightedDistance.toFixed(1)}`);
+        });
+
+        console.log(`  Общая взвешенная длина: ${totalWireLength.toFixed(1)}`);
+        console.log(`  Средняя F-оценка: ${placement.score.toFixed(2)}`);
+    }
+
+    // Улучшенный метод для отображения результатов
+    showDetailedPlacementResults() {
+        const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp));
+        const unplacedComponents = this.getUnplacedComponents();
+        const totalConnections = this.calculateTotalConnections();
+        const totalWireLength = this.estimateTotalWireLength();
+
+        console.log('\n📈 ИТОГОВЫЕ РЕЗУЛЬТАТЫ РАЗМЕЩЕНИЯ:');
+        console.log(`✅ Размещено компонентов: ${placedComponents.length}/${this.components.length}`);
+        console.log(`❌ Не размещено: ${unplacedComponents.length}`);
+        console.log(`🔗 Общее количество связей: ${totalConnections}`);
+        console.log(`📏 Оценочная общая длина соединений: ${totalWireLength.toFixed(1)} усл. ед.`);
+
+        if (unplacedComponents.length > 0) {
+            console.log('\n⚠️ НЕ РАЗМЕЩЕННЫЕ КОМПОНЕНТЫ:');
+            unplacedComponents.forEach(comp => {
+                console.log(`   • ${comp.name} (${comp.reference})`);
+            });
+        }
+
+        console.log('\n🗺️ РАЗМЕЩЕНИЕ КОМПОНЕНТОВ НА СЕТКЕ:');
+        placedComponents.forEach(comp => {
+            const pos = this.findComponentPosition(comp);
+            if (pos && comp.gridPosition) {
+                console.log(`   ${comp.name} (${comp.reference}): позиция (${pos.col},${pos.row}), размер ${comp.gridPosition.width}×${comp.gridPosition.height}, ориентация ${comp.rotation}°`);
+            }
+        });
+
+        // Анализ качества размещения
+        this.analyzePlacementQuality();
+    }
+
+    // Новый метод для анализа качества размещения
+    analyzePlacementQuality() {
+        console.log('\n📊 АНАЛИЗ КАЧЕСТВА РАЗМЕЩЕНИЯ:');
+
+        const connectionMatrix = this.buildWeightedConnectionMatrix();
+        let totalWeightedDistance = 0;
+        let totalConnections = 0;
+        let connectionStats = [];
+
+        for (let i = 0; i < this.components.length; i++) {
+            for (let j = i + 1; j < this.components.length; j++) {
+                const comp1 = this.components[i];
+                const comp2 = this.components[j];
+                const weight = connectionMatrix[comp1.id]?.[comp2.id] || 0;
+
+                if (weight > 0 && this.isComponentPlaced(comp1) && this.isComponentPlaced(comp2)) {
+                    const pos1 = this.findComponentPosition(comp1);
+                    const pos2 = this.findComponentPosition(comp2);
+
+                    if (pos1 && pos2) {
+                        const distance = this.calculateManhattanDistance(pos1, pos2);
+                        const weightedDistance = weight * distance;
+                        totalWeightedDistance += weightedDistance;
+                        totalConnections += weight;
+
+                        connectionStats.push({
+                            comp1: comp1.name,
+                            comp2: comp2.name,
+                            weight: weight,
+                            distance: distance,
+                            weightedDistance: weightedDistance
+                        });
+                    }
+                }
+            }
+        }
+
+        const averageDistance = totalConnections > 0 ? totalWeightedDistance / totalConnections : 0;
+
+        console.log(`   Средняя взвешенная длина соединения: ${averageDistance.toFixed(2)}`);
+        console.log(`   Общая взвешенная длина: ${totalWeightedDistance.toFixed(1)}`);
+
+        // Топ-5 самых длинных соединений
+        const longestConnections = connectionStats.sort((a, b) => b.weightedDistance - a.weightedDistance).slice(0, 5);
+        console.log('   🏆 ТОП-5 САМЫХ ДЛИННЫХ СОЕДИНЕНИЙ:');
+        longestConnections.forEach((conn, index) => {
+            console.log(`     ${index + 1}. ${conn.comp1} ↔ ${conn.comp2}: вес=${conn.weight}, расстояние=${conn.distance}, взвешенное=${conn.weightedDistance.toFixed(1)}`);
+        });
+    }
+
+    // Обновляем метод расчета F-оценок с логированием
+    calculateImprovedFScores(component, neighborPositions) {
+        const connectionMatrix = this.buildWeightedConnectionMatrix();
+        const placedComponents = this.components.filter(comp => this.isComponentPlaced(comp));
+        const fScores = [];
+
+        const orientations = [0, 90, 180, 270];
+
+        neighborPositions.forEach(position => {
+            orientations.forEach(orientation => {
+                if (this.canPlaceComponentWithOrientation(component, position, orientation)) {
+                    const score = this.calculateFScoreWithRealPinDistances(
+                        component, position, orientation, connectionMatrix, placedComponents
+                    );
+
+                    if (score < Infinity) {
+                        fScores.push({
+                            position: position,
+                            orientation: orientation,
+                            score: score,
+                            component: component.name,
+                            positionLabel: `${position.col},${position.row}`
+                        });
+                    }
+                }
+            });
+        });
+
+        return fScores;
     }
 
     selectComponentWithMaxConnections() {
