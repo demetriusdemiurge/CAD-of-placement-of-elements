@@ -1,0 +1,1 @@
+# Board, Position, GOST-сетка
