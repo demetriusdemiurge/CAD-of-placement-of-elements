@@ -1,20 +1,18 @@
 # Grid, Position, GOST-сетка
 from dataclasses import dataclass, field
-from typing import List
-
 
 @dataclass
 class Grid:
     """
     Прямоугольная сетка N x M.
-    Никакого класса Position: позиция = индекс 0..N-1.
+    Позиция = индекс 0..N-1.
 
     - width_cells, height_cells — размер поля в клетках.
     - allowed[idx] — можно ли использовать позицию idx.
     """
     width_cells: int
     height_cells: int
-    allowed: List[bool] = field(default_factory=list)
+    allowed: list[bool] = field(default_factory=list)
 
     def __post_init__(self):
         if self.width_cells <= 0 or self.height_cells <= 0:

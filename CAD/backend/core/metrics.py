@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass
 
-from grid import Grid
-from elements import Element
-from nets import Net, compute_connectivity
+from backend.core.grid import Grid
+from backend.core.elements import Element
+from backend.core.nets import Net, compute_connectivity
 
 # Типы для удобства
 Placement = dict[int, tuple[int, int]]  # element_id -> (pos_idx, orientation)
@@ -49,46 +49,44 @@ def build_element_geoms(
 
     return geoms
 
-def element_center(geom: ElementGeom) -> tuple[float, float]:
-    """
-    Центр элемента в координатах сетки.
-    Можно оставить float, т.к. при нечётных размерах центр будет .5.
-    """
-    cx = geom.x + geom.w / 2.0
-    cy = geom.y + geom.h / 2.0
-    return cx, cy
-
-
-def compute_C_len_and_L_max_components(
+def compute_C_len_and_L_max_pins(
     grid: Grid,
     elements: dict[int, Element],
     nets: list[Net],
-    placement: Placement,
+    placement: Placement,  # element_id -> (pos_idx, orientation)
 ) -> tuple[float, float]:
-    """
-    C_len = sum_{i<j} conn_count[i,j] * dist(center_i, center_j)
-    L_max = max dist(center_i, center_j) по всем парам с conn_count>0.
-    """
     geoms = build_element_geoms(grid, elements, placement)
-    conn_count = compute_connectivity(nets)
 
     C_len = 0.0
     L_max = 0.0
 
-    for (i, j), count in conn_count.items():
-        gi = geoms.get(i)
-        gj = geoms.get(j)
-        # если элемент не размещён (нет в placement), пропускаем
-        if gi is None or gj is None:
+    for net in nets:
+        g_a = geoms.get(net.a_element)
+        g_b = geoms.get(net.b_element)
+        if g_a is None or g_b is None:
+            # если элемент ещё не поставлен (в частичном placement) — связь игнорируем
             continue
 
-        cx_i, cy_i = element_center(gi)
-        cx_j, cy_j = element_center(gj)
+        el_a = g_a.element
+        el_b = g_b.element
 
-        # манхэттенское расстояние по центрам
-        d = abs(cx_i - cx_j) + abs(cy_i - cy_j)
+        # находим сами пины
+        pin_a = next(p for p in el_a.pins if p.id == net.a_pin)
+        pin_b = next(p for p in el_b.pins if p.id == net.b_pin)
 
-        C_len += count * d
+        # локальные координаты пинов с учётом ориентации
+        dx_a, dy_a = el_a.rotated_pin_offset(pin_a, g_a.orientation)
+        dx_b, dy_b = el_b.rotated_pin_offset(pin_b, g_b.orientation)
+
+        # глобальные координаты
+        x_a = g_a.x + dx_a
+        y_a = g_a.y + dy_a
+        x_b = g_b.x + dx_b
+        y_b = g_b.y + dy_b
+
+        d = abs(x_a - x_b) + abs(y_a - y_b)
+
+        C_len += d
         if d > L_max:
             L_max = d
 
@@ -128,18 +126,20 @@ def estimate_C_len_theor_max(
     grid: Grid,
     nets: list[Net],
 ) -> float:
-    # грубая оценка: все связи тянутся через L_theor_max
+    """
+    Грубая оценка максимальной суммарной длины всех связей:
+    считаем, что каждая связь может растягиваться до L_theor_max.
+    """
     L_max = estimate_L_theor_max(grid)
 
-    # считаем количество связей (элементарных пар в nets)
-    total_conn = 0
-    for net in nets:
-        # каждая сеть с k элементами даёт k*(k-1)/2 пар
-        k = len(set(e_id for (e_id, _) in net.pins))
-        if k >= 2:
-            total_conn += k * (k - 1) / 2
+    # теперь каждая Net — это уже одна пара элементов (2 пина)
+    total_conn = len(nets)
 
-    return L_max * total_conn if total_conn > 0 else 1.0
+    if total_conn <= 0:
+        return 1.0  # защита от деления на 0
+
+    return L_max * total_conn
+
 
 def compute_fitness(
     grid: Grid,
@@ -158,7 +158,7 @@ def compute_fitness(
     geoms = build_element_geoms(grid, elements, placement)
 
     # длины
-    C_len, L_max = compute_C_len_and_L_max_components(
+    C_len, L_max = compute_C_len_and_L_max_pins(
         grid, elements, nets, placement
     )
 
