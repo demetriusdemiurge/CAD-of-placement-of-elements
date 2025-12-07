@@ -167,6 +167,7 @@ def main() -> None:
         elements=elements,
         nets=nets,
         directive_placement=directive_placement,
+        verbose=True,
     )
 
     print_placement_ascii(grid, elements, placement)

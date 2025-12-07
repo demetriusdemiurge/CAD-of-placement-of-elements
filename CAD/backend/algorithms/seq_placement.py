@@ -1,4 +1,4 @@
-# последовательный алгоритм по связности
+# последовательный алгоритм по связности (книжный вариант) с логированием
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def is_feasible_position_for_element(
             idx = grid.xy_to_idx(cx, cy)
             if hasattr(grid, "allowed"):
                 allowed = getattr(grid, "allowed")
-                if isinstance(allowed, list) or isinstance(allowed, tuple):
+                if isinstance(allowed, (list, tuple)):
                     if not allowed[idx]:
                         return False
 
@@ -122,12 +122,12 @@ def compute_neighbor_positions(
                 idx = grid.xy_to_idx(nx, ny)
                 if hasattr(grid, "allowed"):
                     allowed = getattr(grid, "allowed")
-                    if isinstance(allowed, list) or isinstance(allowed, tuple):
+                    if isinstance(allowed, (list, tuple)):
                         if not allowed[idx]:
                             continue
                 neighbors.add(idx)
 
-    # если соседей нет (например, большой элемент всё закрыл) — fallback: все позиции
+    # если соседей нет — fallback: все позиции
     if not neighbors:
         return set(range(grid.num_positions))
 
@@ -257,23 +257,22 @@ def place_sequential(
     elements: Dict[int, Element],
     nets: List[Net],
     directive_placement: Placement | None = None,
+    verbose: bool = False,
 ) -> Tuple[Placement, dict]:
     """
-    Последовательный алгоритм размещения по связности (по книге):
+    Последовательный алгоритм размещения по связности (по книге).
 
-    1) Размещение директивных модулей (directive_placement).
-    2) Формирование множества соседних позиций R^k.
-    3) Расчёт оценки J_i для всех неразмещённых модулей.
-    4) Выбор модуля с максимальным J_i.
-    5) Для выбранного модуля расчёт F(p) по всем позициям p ∈ R^k.
-    6) Выбор позиции с минимальным F(p).
-    7) Размещение и обновление множеств E_r, E_n, R^k.
-    8) Повтор до размещения всех модулей.
+    Параметр verbose=True включает подробный лог в консоль.
 
     Возвращает:
       - placement: element_id -> (pos_idx, orientation)
       - final_metrics: глобальные метрики (через compute_fitness).
     """
+
+    def log(msg: str) -> None:
+        if verbose:
+            print(msg)
+
     # Инициализация множеств E_r и E_n
     placement: Placement = {}
     if directive_placement:
@@ -283,16 +282,32 @@ def place_sequential(
     E_r: Set[int] = set(placement.keys())
     E_n: Set[int] = all_ids - E_r
 
+    log("=== Старт последовательного алгоритма по связности ===")
+    log(f"Сетка: {grid.width_cells} x {grid.height_cells} клеток")
+    log(f"Всего элементов: {len(elements)}, связей: {len(nets)}")
+    log(f"Директивно размещены: {sorted(E_r)}")
+    log("")
+
     # Матрица смежности c_ij
     c_ij = build_c_ij(nets)
 
+    step = 1
+
     # Главный цикл по шагам k
     while E_n:
+        log(f"--- Шаг {step} ---")
+        log(f"Размещены (E_r): {sorted(E_r)}")
+        log(f"Не размещены (E_n): {sorted(E_n)}")
+
         # Пункт 2: множество позиций, соседних с занятыми
         neighbor_positions = compute_neighbor_positions(grid, elements, placement)
+        log(f"Соседние позиции R^k (индексы): {sorted(neighbor_positions)}")
 
         # Пункт 3: оценки J для всех неразмещённых
         J = compute_J_for_all(E_r, E_n, c_ij)
+        log("Оценки J для неразмещённых элементов:")
+        for eid in sorted(E_n):
+            log(f"  e{eid}: J = {J.get(eid, 0.0)}")
 
         # Пункт 4: выбор элемента с максимальным J (при равенстве — с меньшим id)
         best_J = None
@@ -305,21 +320,30 @@ def place_sequential(
             elif val == best_J:
                 candidates.append(eid)
 
-        chosen_elem = min(candidates)  # как в примере: при равенстве — меньший номер
+        chosen_elem = min(candidates)
         element = elements[chosen_elem]
+        log(f"Выбран элемент e{chosen_elem} с J = {best_J}")
+        log("")
 
         # Пункт 5–6: выбор лучшей позиции по F для выбранного модуля
         occupied = build_occupied_cells(grid, elements, placement)
         best_F = None
         best_choice: Tuple[int, int] | None = None  # (pos_idx, orientation)
 
-        for pos_idx in neighbor_positions:
+        log(f"Перебор позиций для e{chosen_elem}:")
+        for pos_idx in sorted(neighbor_positions):
             for orient in element.allowed_orientations:
                 if not is_feasible_position_for_element(grid, element, pos_idx, orient, occupied):
+                    log(f"  pos_idx={pos_idx}, orient={orient}: НЕДОПУСТИМО (границы/пересечение)")
                     continue
 
                 F_local = compute_local_F_for_candidate(
                     chosen_elem, pos_idx, orient, E_r, placement, elements, nets, grid
+                )
+                x, y = grid.idx_to_xy(pos_idx)
+                log(
+                    f"  pos_idx={pos_idx} (x={x},y={y}), orient={orient}: "
+                    f"F = {F_local}"
                 )
 
                 if (
@@ -332,6 +356,7 @@ def place_sequential(
 
         # Fallback: если среди соседних ничего не нашли, ищем по всей сетке
         if best_choice is None:
+            log("Среди соседних позиций нет допустимых — ищем по всей сетке.")
             for pos_idx in range(grid.num_positions):
                 for orient in element.allowed_orientations:
                     if not is_feasible_position_for_element(grid, element, pos_idx, orient, occupied):
@@ -350,11 +375,31 @@ def place_sequential(
         if best_choice is None:
             raise RuntimeError(f"Не удалось разместить элемент {chosen_elem}: нет валидных позиций")
 
+        pos_idx_best, orient_best = best_choice
+        x_best, y_best = grid.idx_to_xy(pos_idx_best)
+        log(
+            f"Итог для e{chosen_elem}: выбрана позиция pos_idx={pos_idx_best} "
+            f"(x={x_best}, y={y_best}), ориентация={orient_best}, F_min={best_F}"
+        )
+        log("")
+
         # Пункт 7: фиксируем размещение и обновляем множества
         placement[chosen_elem] = best_choice
         E_r.add(chosen_elem)
         E_n.remove(chosen_elem)
 
+        step += 1
+
+    log("=== Все элементы размещены ===")
+    log("")
+
     # Пункт 8: все модули размещены — считаем глобальный fitness
     final_metrics = compute_fitness(grid, elements, nets, placement)
+
+    if verbose:
+        log("Итоговые метрики:")
+        for k in sorted(final_metrics.keys()):
+            log(f"  {k}: {final_metrics[k]}")
+        log("")
+
     return placement, final_metrics
