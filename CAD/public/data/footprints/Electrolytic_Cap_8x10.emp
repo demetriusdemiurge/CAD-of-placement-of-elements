@@ -1,0 +1,16 @@
+{
+  "name": "Cap_Elec_8x10",
+  "description": "Электролитический конденсатор 8x10мм",
+  "pads": [
+    {"number": "1", "x": -1.5, "y": 0, "width": 2.0, "height": 2.0, "shape": "rect"},
+    {"number": "2", "x": 1.5, "y": 0, "width": 2.0, "height": 2.0, "shape": "rect"}
+  ],
+  "outline": [
+    {"x": -4, "y": -4},
+    {"x": 4, "y": -4},
+    {"x": 4, "y": 4},
+    {"x": -4, "y": 4}
+  ],
+  "width": 8,
+  "height": 8
+}

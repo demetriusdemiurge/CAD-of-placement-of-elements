@@ -1,0 +1,18 @@
+{
+  "name": "SOT-223",
+  "description": "Корпус SOT-223 (стабилизаторы)",
+  "pads": [
+    {"number": "1", "x": -2.3, "y": 3.15, "width": 0.9, "height": 1.5, "shape": "rect"},
+    {"number": "2", "x": 0, "y": 3.15, "width": 0.9, "height": 1.5, "shape": "rect"},
+    {"number": "3", "x": 2.3, "y": 3.15, "width": 0.9, "height": 1.5, "shape": "rect"},
+    {"number": "4", "x": 0, "y": -3.15, "width": 3.5, "height": 1.5, "shape": "rect"}
+  ],
+  "outline": [
+    {"x": -3.5, "y": -2.5},
+    {"x": 3.5, "y": -2.5},
+    {"x": 3.5, "y": 2.5},
+    {"x": -3.5, "y": 2.5}
+  ],
+  "width": 7,
+  "height": 7
+}

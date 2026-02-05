@@ -1,0 +1,17 @@
+{
+  "name": "TO-220",
+  "description": "Корпус TO-220 (транзистор/стабилизатор)",
+  "pads": [
+    {"number": "1", "x": -2.54, "y": 0, "width": 1.5, "height": 2.0, "shape": "rect"},
+    {"number": "2", "x": 0, "y": 0, "width": 1.5, "height": 2.0, "shape": "rect"},
+    {"number": "3", "x": 2.54, "y": 0, "width": 1.5, "height": 2.0, "shape": "rect"}
+  ],
+  "outline": [
+    {"x": -5, "y": -2},
+    {"x": 5, "y": -2},
+    {"x": 5, "y": 8},
+    {"x": -5, "y": 8}
+  ],
+  "width": 10,
+  "height": 10
+}

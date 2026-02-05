@@ -1,0 +1,9 @@
+{
+  "libraries": [
+    "test/lab2library.lib"
+  ],
+  "footprintLibraries": [
+    "footprints/standard_library.md"
+  ],
+  "description": "Библиотеки компонентов и корпусов KiCad"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Crystal_HC49",
+  "description": "Кварцевый резонатор HC49",
+  "pads": [
+    {"number": "1", "x": -2.4, "y": 0, "width": 1.5, "height": 1.5, "shape": "circle"},
+    {"number": "2", "x": 2.4, "y": 0, "width": 1.5, "height": 1.5, "shape": "circle"}
+  ],
+  "outline": [
+    {"x": -5.5, "y": -2},
+    {"x": 5.5, "y": -2},
+    {"x": 5.5, "y": 2},
+    {"x": -5.5, "y": 2}
+  ],
+  "width": 11,
+  "height": 4
+}

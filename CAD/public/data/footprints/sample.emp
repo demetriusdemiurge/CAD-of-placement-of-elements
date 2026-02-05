@@ -1,0 +1,32 @@
+{
+  "name": "R_0805_Sample",
+  "description": "Пример корпуса резистора 0805",
+  "pads": [
+    {
+      "number": "1",
+      "x": -1.0,
+      "y": 0,
+      "width": 1.0,
+      "height": 1.25,
+      "shape": "rect",
+      "layer": "top"
+    },
+    {
+      "number": "2",
+      "x": 1.0,
+      "y": 0,
+      "width": 1.0,
+      "height": 1.25,
+      "shape": "rect",
+      "layer": "top"
+    }
+  ],
+  "outline": [
+    {"x": -1.0, "y": -0.625},
+    {"x": 1.0, "y": -0.625},
+    {"x": 1.0, "y": 0.625},
+    {"x": -1.0, "y": 0.625}
+  ],
+  "width": 2.0,
+  "height": 1.25
+}

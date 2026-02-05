@@ -1,0 +1,64 @@
+(kicad_pcb (version 20211014) (generator pcbnew)
+
+  (general
+    (thickness 1.6)
+  )
+
+  (paper "A4")
+
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal)
+    (36 "B.SilkS" user "B.Silkscreen")
+    (37 "F.SilkS" user "F.Silkscreen")
+    (44 "Edge.Cuts" user)
+  )
+
+  (setup
+    (pad_to_mask_clearance 0)
+  )
+
+  (gr_rect (start 0 0) (end 80 60) (layer "Edge.Cuts") (width 0.1))
+
+  (footprint "Resistor_SMD:R_0805_2012Metric"
+    (at 15 20 0)
+    (fp_text reference "R1" (at 0 -1.5) (layer "F.SilkS"))
+    (fp_text value "10k" (at 0 1.5) (layer "F.Fab"))
+    (pad "1" smd rect (at -1 0) (size 1 1.2) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at 1 0) (size 1 1.2) (layers "F.Cu" "F.Paste" "F.Mask"))
+  )
+
+  (footprint "Capacitor_SMD:C_0805_2012Metric"
+    (at 35 20 0)
+    (fp_text reference "C1" (at 0 -1.5) (layer "F.SilkS"))
+    (fp_text value "100nF" (at 0 1.5) (layer "F.Fab"))
+    (pad "1" smd rect (at -1 0) (size 1 1.2) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at 1 0) (size 1 1.2) (layers "F.Cu" "F.Paste" "F.Mask"))
+  )
+
+  (footprint "Resistor_SMD:R_0805_2012Metric"
+    (at 55 20 0)
+    (fp_text reference "R2" (at 0 -1.5) (layer "F.SilkS"))
+    (fp_text value "4.7k" (at 0 1.5) (layer "F.Fab"))
+    (pad "1" smd rect (at -1 0) (size 1 1.2) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at 1 0) (size 1 1.2) (layers "F.Cu" "F.Paste" "F.Mask"))
+  )
+
+  (footprint "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+    (at 35 40 0)
+    (fp_text reference "U1" (at 0 -3.5) (layer "F.SilkS"))
+    (fp_text value "LM358" (at 0 3.5) (layer "F.Fab"))
+    (pad "1" smd rect (at -2.7 -1.905) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at -2.7 -0.635) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "3" smd rect (at -2.7 0.635) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "4" smd rect (at -2.7 1.905) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "5" smd rect (at 2.7 1.905) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "6" smd rect (at 2.7 0.635) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "7" smd rect (at 2.7 -0.635) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "8" smd rect (at 2.7 -1.905) (size 1.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  )
+
+  (segment (start 16 20) (end 34 20) (width 0.25) (layer "F.Cu") (net 1))
+  (segment (start 36 20) (end 54 20) (width 0.25) (layer "F.Cu") (net 2))
+
+)

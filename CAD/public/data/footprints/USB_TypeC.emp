@@ -1,0 +1,28 @@
+{
+  "name": "USB_Type-C",
+  "description": "Разъем USB Type-C SMD",
+  "pads": [
+    {"number": "A1", "x": -2.75, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A2", "x": -2.25, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A3", "x": -1.75, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A4", "x": -1.25, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A5", "x": -0.75, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A6", "x": -0.25, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A7", "x": 0.25, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A8", "x": 0.75, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A9", "x": 1.25, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A10", "x": 1.75, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A11", "x": 2.25, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "A12", "x": 2.75, "y": -3.5, "width": 0.3, "height": 1.0, "shape": "rect"},
+    {"number": "SH1", "x": -4.3, "y": 0, "width": 1.0, "height": 2.5, "shape": "rect"},
+    {"number": "SH2", "x": 4.3, "y": 0, "width": 1.0, "height": 2.5, "shape": "rect"}
+  ],
+  "outline": [
+    {"x": -4.5, "y": -4},
+    {"x": 4.5, "y": -4},
+    {"x": 4.5, "y": 4},
+    {"x": -4.5, "y": 4}
+  ],
+  "width": 9,
+  "height": 8
+}
